@@ -25,6 +25,7 @@ def init_state():
         "response_topic": None,
         "rx_queue": queue.Queue(),
         "last_response": None,
+        "response_log": [],   # 👈 ADD THIS
         "ct_power": None,
         "export_limit": None,
     }
@@ -130,12 +131,26 @@ while not st.session_state.rx_queue.empty():
 
     elif event == "MSG":
         st.session_state.last_response = payload
+        st.session_state.response_log.append(payload)
+
 
 # =====================================================
 # STATUS
 # =====================================================
 if st.session_state.connected:
     st.success("Connected to MQTT")
+    
+    st.subheader("🔍 Raw MQTT Responses (Debug)")
+    
+    if st.session_state.response_log:
+        st.text_area(
+            "Incoming responses",
+            value="\n\n---\n\n".join(st.session_state.response_log),
+            height=250
+        )
+    else:
+        st.info("No responses received yet.")
+
 elif st.session_state.mqtt_client:
     st.info("Connecting to MQTT...")
     time.sleep(0.3)
