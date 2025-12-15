@@ -91,6 +91,23 @@ def extract_register_value(payload: str, register: str):
                 return None
     return None
 
+def wait_for_register(register, timeout=5):
+    """
+    Waits until a response containing '<register>:' appears.
+    Returns the parsed value or None on timeout.
+    """
+    start = time.time()
+
+    while time.time() - start < timeout:
+        payload = st.session_state.last_response
+        value = extract_register_value(payload, register)
+        if value is not None:
+            return value
+        time.sleep(0.2)
+
+    return None
+
+
 # =====================================================
 # UI
 # =====================================================
@@ -138,10 +155,7 @@ update = st.button("Update")
 if update:
     st.session_state.last_response = None
     publish("READ04**12345##1234567890,1032")
-    st.session_state.ct_power = extract_register_value(
-        st.session_state.last_response,
-        register="1032"
-    )
+    st.session_state.ct_power = wait_for_register("1032")
 
 
 ct_enabled = "Yes" if st.session_state.ct_power not in (None, 0) else "No"
@@ -150,10 +164,8 @@ st.text_input("CT Enabled", ct_enabled, disabled=True)
 if update:
     st.session_state.last_response = None
     publish("READ03**12345##1234567890,0802")
-    st.session_state.export_limit = extract_register_value(
-        st.session_state.last_response,
-        register="0802"
-    )
+    st.session_state.export_limit = wait_for_register("0802")
+
 
 st.text_input(
     "Export Limit Set (W)",
@@ -182,11 +194,8 @@ if ct_enabled == "Yes":
 
             st.session_state.last_response = None
             publish("READ03**12345##1234567890,0802")
+            verify = wait_for_register("0802")
 
-            verify = extract_register_value(
-        st.session_state.last_response,
-        register="0802"
-    )
 
 
         if verify == new_val:
