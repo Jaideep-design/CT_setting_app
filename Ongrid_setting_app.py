@@ -3,7 +3,9 @@ import time
 import queue
 import paho.mqtt.client as mqtt
 import warnings
-warnings.filterwarnings('ignore')
+from streamlit_autorefresh import st_autorefresh
+
+warnings.filterwarnings("ignore")
 
 # =====================================================
 # CONFIG
@@ -13,6 +15,9 @@ MQTT_PORT = 1883
 
 TOPIC_PREFIX = "EZMCOGX"
 DEVICE_TOPICS = [f"{TOPIC_PREFIX}{i:06d}" for i in range(1, 101)]
+
+AUTO_REFRESH_MS = 500
+MAX_LOG_LINES = 100
 
 # =====================================================
 # SESSION STATE INIT
@@ -24,10 +29,10 @@ def init_state():
         "command_topic": None,
         "response_topic": None,
         "rx_queue": queue.Queue(),
-        "last_response": None,
-        "response_log": [],   # 👈 ADD THIS
+        "response_log": [],
         "ct_power": None,
         "export_limit": None,
+        "last_cmd_ts": None,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -36,7 +41,7 @@ def init_state():
 init_state()
 
 # =====================================================
-# MQTT SETUP (NO STREAMLIT INSIDE CALLBACKS)
+# MQTT SETUP
 # =====================================================
 def mqtt_connect(device_id):
     if st.session_state.mqtt_client:
@@ -50,7 +55,7 @@ def mqtt_connect(device_id):
 
     def on_connect(client, userdata, flags, rc):
         if rc == 0:
-            client.subscribe(response_topic)   # ✅ closure variable
+            client.subscribe(response_topic)
             rx_queue.put(("CONNECTED", None))
 
     def on_message(client, userdata, msg):
@@ -62,27 +67,22 @@ def mqtt_connect(device_id):
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()
 
-    # Store ONLY in main thread
     st.session_state.mqtt_client = client
     st.session_state.command_topic = command_topic
     st.session_state.response_topic = response_topic
 
-def publish(cmd, wait=1):
+def publish(cmd):
+    st.session_state.last_cmd_ts = time.time()
     st.session_state.mqtt_client.publish(
         st.session_state.command_topic,
         cmd,
         qos=1
     )
-    time.sleep(wait)
 
+# =====================================================
+# RESPONSE HANDLING
+# =====================================================
 def extract_register_value(payload: str, register: str):
-    """
-    Extracts value for a given register from Solax response.
-    Example line: '1032:64392'
-    """
-    if not payload:
-        return None
-
     for line in payload.splitlines():
         line = line.strip()
         if line.startswith(f"{register}:"):
@@ -92,7 +92,7 @@ def extract_register_value(payload: str, register: str):
                 return None
     return None
 
-def wait_for_register(register, timeout=5):
+def wait_for_register(register, timeout=6):
     start = time.time()
     seen = set()
 
@@ -102,28 +102,33 @@ def wait_for_register(register, timeout=5):
                 continue
             seen.add(payload)
 
-            value = extract_register_value(payload, register)
-            if value is not None:
-                return value
+            val = extract_register_value(payload, register)
+            if val is not None:
+                return val
 
-        time.sleep(0.2)
+        time.sleep(0.1)
 
     return None
-
 
 # =====================================================
 # UI
 # =====================================================
-st.set_page_config(page_title="Solax Zero Export Control", layout="centered")
-st.title("Solax Inverter – Zero Export Control")
+st.set_page_config("Solax Zero Export Control", layout="centered")
+st.title("🔌 Solax Inverter – Zero Export Control")
 
-device = st.selectbox("Select Device Topic", DEVICE_TOPICS)
+device = st.selectbox("Select Device", DEVICE_TOPICS)
 
 if st.button("Connect", disabled=st.session_state.connected):
     mqtt_connect(device)
 
 # =====================================================
-# PROCESS MQTT EVENTS (MAIN THREAD ONLY)
+# AUTO REFRESH (CRITICAL)
+# =====================================================
+if st.session_state.mqtt_client:
+    st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
+
+# =====================================================
+# PROCESS MQTT EVENTS
 # =====================================================
 while not st.session_state.rx_queue.empty():
     event, payload = st.session_state.rx_queue.get()
@@ -132,34 +137,27 @@ while not st.session_state.rx_queue.empty():
         st.session_state.connected = True
 
     elif event == "MSG":
-        st.session_state.last_response = payload
         st.session_state.response_log.append(payload)
-
+        st.session_state.response_log = st.session_state.response_log[-MAX_LOG_LINES:]
 
 # =====================================================
 # STATUS
 # =====================================================
 if st.session_state.connected:
     st.success("Connected to MQTT")
-    
-    st.subheader("🔍 Raw MQTT Responses (Debug)")
-    
-    if st.session_state.response_log:
-        st.text_area(
-            "Incoming responses",
-            value="\n\n---\n\n".join(st.session_state.response_log),
-            height=250
-        )
-    else:
-        st.info("No responses received yet.")
-
-elif st.session_state.mqtt_client:
-    st.info("Connecting to MQTT...")
-    time.sleep(0.3)
-    st.rerun()
 else:
     st.warning("Not connected")
     st.stop()
+
+# =====================================================
+# DEBUG VIEW
+# =====================================================
+with st.expander("📡 Raw MQTT Responses"):
+    st.text_area(
+        "Responses",
+        value="\n\n---\n\n".join(st.session_state.response_log),
+        height=300
+    )
 
 # =====================================================
 # INVERTER SETTINGS
@@ -167,26 +165,20 @@ else:
 st.divider()
 st.subheader("Inverter Settings")
 
-update = st.button("Update")
+if st.button("Update"):
+    with st.spinner("Reading CT & Export limit..."):
+        publish("READ04**12345##1234567890,1032")
+        st.session_state.ct_power = wait_for_register("1032")
 
-if update:
-    st.session_state.last_response = None
-    publish("READ04**12345##1234567890,1032")
-    st.session_state.ct_power = wait_for_register("1032")
-
+        publish("READ03**12345##1234567890,0802")
+        st.session_state.export_limit = wait_for_register("0802")
 
 ct_enabled = "Yes" if st.session_state.ct_power not in (None, 0) else "No"
 st.text_input("CT Enabled", ct_enabled, disabled=True)
 
-if update:
-    st.session_state.last_response = None
-    publish("READ03**12345##1234567890,0802")
-    st.session_state.export_limit = wait_for_register("0802")
-
-
 st.text_input(
-    "Export Limit Set (W)",
-    str(st.session_state.export_limit) if st.session_state.export_limit else "",
+    "Export Limit (W)",
+    str(st.session_state.export_limit or ""),
     disabled=True
 )
 
@@ -209,16 +201,13 @@ if ct_enabled == "Yes":
             publish(f"UP#,1540:{new_val:05d}")
             publish("UP#,1536:00001")
 
-            st.session_state.last_response = None
             publish("READ03**12345##1234567890,0802")
             verify = wait_for_register("0802")
-
-
 
         if verify == new_val:
             st.success("Export value updated successfully")
             st.session_state.export_limit = verify
         else:
-            st.error("Export value update failed")
+            st.error("Export update failed")
 else:
-    st.info("CT is not enabled. Zero export cannot be configured.")
+    st.info("CT not enabled. Zero export unavailable.")
