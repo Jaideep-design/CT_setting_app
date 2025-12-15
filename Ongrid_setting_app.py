@@ -178,9 +178,17 @@ st.text_input("CT Enabled", ct_enabled, disabled=True)
 
 if update:
     st.session_state.last_response = None
-    publish("READ03**12345##1234567890,0802")
-    st.session_state.export_limit = wait_for_register("0802")
+    st.session_state.response_log.clear()
 
+    publish("READ04**12345##1234567890,1032")
+
+    ct_val = wait_for_register("1032")
+
+    # 🔍 DEBUG PRINTS
+    print("DEBUG: last_response =", st.session_state.last_response)
+    print("DEBUG: parsed CT value =", ct_val)
+
+    st.session_state.ct_power = ct_val
 
 st.text_input(
     "Export Limit Set (W)",
@@ -220,3 +228,4 @@ if ct_enabled == "Yes":
             st.error("Export value update failed")
 else:
     st.info("CT is not enabled. Zero export cannot be configured.")
+
