@@ -2,6 +2,8 @@ import streamlit as st
 import time
 import queue
 import paho.mqtt.client as mqtt
+import warnings
+warnings.filterwarnings('ignore')
 
 # =====================================================
 # CONFIG
@@ -72,11 +74,22 @@ def publish(cmd, wait=1):
     )
     time.sleep(wait)
 
-def extract_int(payload):
+def extract_register_value(payload: str, register: str):
+    """
+    Extracts value for a given register from Solax response.
+    Example line: '1032:64392'
+    """
     if not payload:
         return None
-    digits = "".join(filter(str.isdigit, payload))
-    return int(digits) if digits else None
+
+    for line in payload.splitlines():
+        line = line.strip()
+        if line.startswith(f"{register}:"):
+            try:
+                return int(line.split(":")[1])
+            except ValueError:
+                return None
+    return None
 
 # =====================================================
 # UI
@@ -125,7 +138,11 @@ update = st.button("Update")
 if update:
     st.session_state.last_response = None
     publish("READ04**12345##1234567890,1032")
-    st.session_state.ct_power = extract_int(st.session_state.last_response)
+    st.session_state.ct_power = extract_register_value(
+        st.session_state.last_response,
+        register="1032"
+    )
+
 
 ct_enabled = "Yes" if st.session_state.ct_power not in (None, 0) else "No"
 st.text_input("CT Enabled", ct_enabled, disabled=True)
@@ -133,7 +150,10 @@ st.text_input("CT Enabled", ct_enabled, disabled=True)
 if update:
     st.session_state.last_response = None
     publish("READ03**12345##1234567890,0802")
-    st.session_state.export_limit = extract_int(st.session_state.last_response)
+    st.session_state.export_limit = extract_register_value(
+        st.session_state.last_response,
+        register="0802"
+    )
 
 st.text_input(
     "Export Limit Set (W)",
@@ -163,7 +183,11 @@ if ct_enabled == "Yes":
             st.session_state.last_response = None
             publish("READ03**12345##1234567890,0802")
 
-            verify = extract_int(st.session_state.last_response)
+            verify = extract_register_value(
+        st.session_state.last_response,
+        register="0802"
+    )
+
 
         if verify == new_val:
             st.success("Export value updated successfully")
