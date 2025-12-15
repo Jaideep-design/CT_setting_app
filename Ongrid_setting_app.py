@@ -22,6 +22,7 @@ def init_state():
         "command_topic": None,
         "response_topic": None,
         "rx_queue": queue.Queue(),
+        "last_response": None,
         "ct_power": None,
         "export_limit": None,
     }
@@ -32,22 +33,21 @@ def init_state():
 init_state()
 
 # =====================================================
-# MQTT SETUP
+# MQTT SETUP (NO STREAMLIT INSIDE CALLBACKS)
 # =====================================================
 def mqtt_connect(device_id):
     if st.session_state.mqtt_client:
         return
 
-    st.session_state.command_topic = f"/AC/5/{device_id}/Command"
-    st.session_state.response_topic = f"/AC/5/{device_id}/Response"
-
+    command_topic = f"/AC/5/{device_id}/Command"
+    response_topic = f"/AC/5/{device_id}/Response"
     rx_queue = st.session_state.rx_queue
 
     client = mqtt.Client()
 
     def on_connect(client, userdata, flags, rc):
         if rc == 0:
-            client.subscribe(st.session_state.response_topic)
+            client.subscribe(response_topic)   # ✅ closure variable
             rx_queue.put(("CONNECTED", None))
 
     def on_message(client, userdata, msg):
@@ -59,7 +59,10 @@ def mqtt_connect(device_id):
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()
 
+    # Store ONLY in main thread
     st.session_state.mqtt_client = client
+    st.session_state.command_topic = command_topic
+    st.session_state.response_topic = response_topic
 
 def publish(cmd, wait=1):
     st.session_state.mqtt_client.publish(
@@ -81,13 +84,14 @@ def extract_int(payload):
 st.set_page_config(page_title="Solax Zero Export Control", layout="centered")
 st.title("Solax Inverter – Zero Export Control")
 
-# ---------------- DEVICE ----------------
 device = st.selectbox("Select Device Topic", DEVICE_TOPICS)
 
 if st.button("Connect", disabled=st.session_state.connected):
     mqtt_connect(device)
 
-# ---------------- HANDLE MQTT EVENTS ----------------
+# =====================================================
+# PROCESS MQTT EVENTS (MAIN THREAD ONLY)
+# =====================================================
 while not st.session_state.rx_queue.empty():
     event, payload = st.session_state.rx_queue.get()
 
@@ -97,7 +101,9 @@ while not st.session_state.rx_queue.empty():
     elif event == "MSG":
         st.session_state.last_response = payload
 
-# ---------------- STATUS ----------------
+# =====================================================
+# STATUS
+# =====================================================
 if st.session_state.connected:
     st.success("Connected to MQTT")
 elif st.session_state.mqtt_client:
@@ -116,32 +122,22 @@ st.subheader("Inverter Settings")
 
 update = st.button("Update")
 
-# -------- CT CHECK --------
 if update:
     st.session_state.last_response = None
     publish("READ04**12345##1234567890,1032")
-    time.sleep(1)
     st.session_state.ct_power = extract_int(st.session_state.last_response)
 
-ct_enabled = (
-    "Yes"
-    if st.session_state.ct_power not in (None, 0)
-    else "No"
-)
-
+ct_enabled = "Yes" if st.session_state.ct_power not in (None, 0) else "No"
 st.text_input("CT Enabled", ct_enabled, disabled=True)
 
-# -------- EXPORT LIMIT --------
 if update:
     st.session_state.last_response = None
     publish("READ03**12345##1234567890,0802")
-    time.sleep(1)
     st.session_state.export_limit = extract_int(st.session_state.last_response)
 
 st.text_input(
     "Export Limit Set (W)",
-    str(st.session_state.export_limit)
-    if st.session_state.export_limit is not None else "",
+    str(st.session_state.export_limit) if st.session_state.export_limit else "",
     disabled=True
 )
 
@@ -151,13 +147,10 @@ st.text_input(
 st.divider()
 
 if ct_enabled == "Yes":
-    st.subheader("Export Setting")
-
     new_val = st.number_input(
         "Set Export Limit (W)",
         min_value=1,
         max_value=10000,
-        step=1,
         value=st.session_state.export_limit or 1
     )
 
@@ -169,7 +162,6 @@ if ct_enabled == "Yes":
 
             st.session_state.last_response = None
             publish("READ03**12345##1234567890,0802")
-            time.sleep(1)
 
             verify = extract_int(st.session_state.last_response)
 
