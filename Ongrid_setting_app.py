@@ -167,17 +167,25 @@ def run_state_machine():
             continue
 
         # =====================================================
-        # READ CT → then READ EXPORT
+        # UPDATE FLOW (Update button)
         # =====================================================
-        # ---------------- READ CT (update only) ----------------
-        if st.session_state.state == "READ_CT_ONLY":
+        if st.session_state.state == "UPDATE_CT":
             st.session_state.ct_power = value
+        
+            publish("READ03**12345##1234567890,0802")
+            st.session_state.pending_register = "0802"
+            st.session_state.pending_since = time.time()
+            st.session_state.state = "UPDATE_EXPORT"
+            st.session_state.parsed_payloads.clear()
+            break
+        
+        elif st.session_state.state == "UPDATE_EXPORT":
+            st.session_state.export_limit = value
         
             st.session_state.pending_register = None
             st.session_state.state = "CONNECTED"
             st.session_state.parsed_payloads.clear()
             break
-        
         # ---------------- READ CT (enable/disable flow) --------
         elif st.session_state.state == "READ_CT":
             st.session_state.ct_power = value
@@ -269,7 +277,7 @@ if st.button("Update", disabled=st.session_state.state != "CONNECTED"):
     publish("READ04**12345##1234567890,1032")
     st.session_state.pending_register = "1032"
     st.session_state.pending_since = time.time()
-    st.session_state.state = "READ_CT_ONLY"
+    st.session_state.state = "UPDATE_CT"
 
 ct_enabled = "Yes" if st.session_state.ct_power not in (None, 0) else "No"
 
@@ -334,6 +342,7 @@ if disable_clicked:
     st.session_state.pending_register = "0802"
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
+
 
 
 
