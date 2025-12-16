@@ -6,6 +6,7 @@ import warnings
 from streamlit_autorefresh import st_autorefresh
 import json
 import re
+
 warnings.filterwarnings("ignore")
 
 # =====================================================
@@ -19,6 +20,7 @@ DEVICE_TOPICS = [f"{TOPIC_PREFIX}{i:06d}" for i in range(1, 101)]
 
 AUTO_REFRESH_MS = 500
 MAX_LOG_LINES = 100
+TIMEOUT_SECONDS = 6
 
 # =====================================================
 # SESSION STATE INIT
@@ -30,15 +32,19 @@ def init_state():
         "command_topic": None,
         "response_topic": None,
         "rx_queue": queue.Queue(),
-        "response_log": [],
+        "response_log": [],              # (ts, payload)
+        "parse_debug": [],
+        "parsed_payloads": set(),
+
         "ct_power": None,
         "export_limit": None,
-        "last_cmd_ts": None,
-        "parse_debug": [],
-        "pending_register": None,
+
+        "pending_register": None,        # "1032" | "0802"
+        "pending_action": None,          # read_ct | read_export | enable | disable
+        "expected_export_value": None,
         "pending_since": None,
-        "parsed_payloads": set()
     }
+
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
@@ -52,32 +58,29 @@ def mqtt_connect(device_id):
     if st.session_state.mqtt_client:
         return
 
-    command_topic = f"/AC/5/{device_id}/Command"
-    response_topic = f"/AC/5/{device_id}/Response"
-    rx_queue = st.session_state.rx_queue
+    cmd_topic = f"/AC/5/{device_id}/Command"
+    rsp_topic = f"/AC/5/{device_id}/Response"
 
     client = mqtt.Client()
 
     def on_connect(client, userdata, flags, rc):
         if rc == 0:
-            client.subscribe(response_topic)
-            rx_queue.put(("CONNECTED", None))
+            client.subscribe(rsp_topic)
+            st.session_state.rx_queue.put(("CONNECTED", None))
 
     def on_message(client, userdata, msg):
-        rx_queue.put(("MSG", msg.payload.decode(errors="ignore")))
+        st.session_state.rx_queue.put(("MSG", msg.payload.decode(errors="ignore")))
 
     client.on_connect = on_connect
     client.on_message = on_message
-
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()
 
     st.session_state.mqtt_client = client
-    st.session_state.command_topic = command_topic
-    st.session_state.response_topic = response_topic
+    st.session_state.command_topic = cmd_topic
+    st.session_state.response_topic = rsp_topic
 
 def publish(cmd):
-    st.session_state.last_cmd_ts = time.time()
     st.session_state.mqtt_client.publish(
         st.session_state.command_topic,
         cmd,
@@ -85,61 +88,8 @@ def publish(cmd):
     )
 
 # =====================================================
-# RESPONSE HANDLING
+# RX QUEUE DRAIN
 # =====================================================
-def extract_register_value(payload: str, register: str):
-    debug = st.session_state.parse_debug
-
-    debug.append("---- NEW PAYLOAD ----")
-    debug.append(payload)
-
-    if not payload:
-        debug.append("Payload empty → ignored")
-        return None
-
-    rsp = None
-
-    # 1️⃣ Try JSON first
-    try:
-        data = json.loads(payload)
-        rsp = data.get("rsp", "")
-        debug.append("Parsed via json.loads()")
-    except Exception as e:
-        debug.append(f"JSON decode failed: {e}")
-        # 2️⃣ Fallback: extract rsp manually
-        match = re.search(r'"rsp"\s*:\s*"([\s\S]*)"\s*}', payload)
-        if match:
-            rsp = match.group(1)
-            debug.append("Parsed rsp via regex fallback")
-        else:
-            debug.append("Failed to extract rsp → ignored")
-            return None
-
-    debug.append("Parsed rsp:")
-    debug.append(rsp)
-
-    # Ignore interim responses
-    if "READ PROCESSING" in rsp:
-        debug.append("Found READ PROCESSING → ignored")
-        return None
-
-    # Parse register
-    for line in rsp.splitlines():
-        line = line.strip()
-        debug.append(f"Checking line: {line}")
-
-        if line.startswith(f"{register}:"):
-            try:
-                value = int(line.split(":")[1])
-                debug.append(f"✅ MATCH FOUND → {register} = {value}")
-                return value
-            except ValueError as e:
-                debug.append(f"Value parse error: {e}")
-                return None
-
-    debug.append(f"No register {register} found")
-    return None
-    
 def drain_rx_queue():
     while not st.session_state.rx_queue.empty():
         event, payload = st.session_state.rx_queue.get()
@@ -148,72 +98,111 @@ def drain_rx_queue():
             st.session_state.connected = True
 
         elif event == "MSG":
-            st.session_state.response_log.append(
-                (time.time(), payload)
-            )
+            st.session_state.response_log.append((time.time(), payload))
             st.session_state.response_log = st.session_state.response_log[-MAX_LOG_LINES:]
 
+# =====================================================
+# RESPONSE PARSING
+# =====================================================
+def extract_register_value(payload: str, register: str):
+    debug = st.session_state.parse_debug
+
+    debug.append("---- NEW PAYLOAD ----")
+    debug.append(payload)
+
+    rsp = None
+
+    try:
+        data = json.loads(payload)
+        rsp = data.get("rsp", "")
+        debug.append("Parsed via json.loads()")
+    except Exception as e:
+        debug.append(f"JSON decode failed: {e}")
+        match = re.search(r'"rsp"\s*:\s*"([\s\S]*)"\s*}', payload)
+        if not match:
+            debug.append("Failed to extract rsp")
+            return None
+        rsp = match.group(1)
+        debug.append("Parsed rsp via regex fallback")
+
+    debug.append("Parsed rsp:")
+    debug.append(rsp)
+
+    if "READ PROCESSING" in rsp:
+        debug.append("Found READ PROCESSING → ignored")
+        return None
+
+    for line in rsp.splitlines():
+        line = line.strip()
+        debug.append(f"Checking line: {line}")
+        if line.startswith(f"{register}:"):
+            value = int(line.split(":")[1])
+            debug.append(f"✅ MATCH FOUND → {register} = {value}")
+            return value
+
+    return None
+
+# =====================================================
+# EVENT-DRIVEN PARSER
+# =====================================================
 if st.session_state.pending_register:
     now = time.time()
 
-    # ⏱️ safety timeout (5 seconds)
-    if now - st.session_state.pending_since > 5:
-        st.session_state.parse_debug.append("⏱️ Timeout waiting for register")
+    if now - st.session_state.pending_since > TIMEOUT_SECONDS:
+        st.session_state.parse_debug.append("⏱️ Timeout waiting for response")
         st.session_state.pending_register = None
-        st.session_state.pending_since = None
+        st.session_state.pending_action = None
+        st.session_state.expected_export_value = None
         st.session_state.parsed_payloads.clear()
 
     else:
         for ts, payload in st.session_state.response_log:
-
-            # Ignore old messages
-            if ts < st.session_state.pending_since:
-                continue
-
-            # 🔒 Ignore already-parsed payloads
             if payload in st.session_state.parsed_payloads:
                 continue
 
             st.session_state.parsed_payloads.add(payload)
+            value = extract_register_value(payload, st.session_state.pending_register)
 
-            value = extract_register_value(
-                payload,
-                st.session_state.pending_register
-            )
+            if value is None:
+                continue
 
-            if value is not None:
+            # ----------------------------
+            # READ CT → then READ EXPORT
+            # ----------------------------
+            if st.session_state.pending_action == "read_ct":
                 st.session_state.ct_power = value
 
-                # ✅ DONE — clear state
-                st.session_state.pending_register = None
-                st.session_state.pending_since = None
+                publish("READ03**12345##1234567890,0802")
+                st.session_state.pending_register = "0802"
+                st.session_state.pending_action = "read_export"
+                st.session_state.pending_since = time.time()
                 st.session_state.parsed_payloads.clear()
-
                 break
 
-# def wait_for_register(register, timeout=6):
-#     start = time.time()
-#     seen = set()
+            elif st.session_state.pending_action == "read_export":
+                st.session_state.export_limit = value
+                st.session_state.pending_register = None
+                st.session_state.pending_action = None
+                st.session_state.parsed_payloads.clear()
+                break
 
-#     while time.time() - start < timeout:
-#         drain_rx_queue()
+            # ----------------------------
+            # ENABLE / DISABLE VALIDATION
+            # ----------------------------
+            elif st.session_state.pending_action in ("enable", "disable"):
+                st.session_state.export_limit = value
 
-#         for ts, payload in st.session_state.response_log:
-#             # 🔥 Only parse messages AFTER command was sent
-#             if ts < st.session_state.last_cmd_ts:
-#                 continue
+                if value == st.session_state.expected_export_value:
+                    st.success("Export setting updated successfully")
+                else:
+                    st.error("Export setting update failed")
 
-#             if payload in seen:
-#                 continue
-#             seen.add(payload)
+                st.session_state.pending_register = None
+                st.session_state.pending_action = None
+                st.session_state.expected_export_value = None
+                st.session_state.parsed_payloads.clear()
+                break
 
-#             value = extract_register_value(payload, register)
-#             if value is not None:
-#                 return value
-
-#         time.sleep(0.1)
-
-#     return None
 # =====================================================
 # UI
 # =====================================================
@@ -225,37 +214,33 @@ device = st.selectbox("Select Device", DEVICE_TOPICS)
 if st.button("Connect", disabled=st.session_state.connected):
     mqtt_connect(device)
 
-# =====================================================
-# AUTO REFRESH (CRITICAL)
-# =====================================================
 if st.session_state.mqtt_client:
     st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
     drain_rx_queue()
-# =====================================================
-# STATUS
-# =====================================================
-if st.session_state.connected:
-    st.success("Connected to MQTT")
-else:
+
+if not st.session_state.connected:
     st.warning("Not connected")
     st.stop()
 
+st.success("Connected to MQTT")
+
 # =====================================================
-# DEBUG VIEW
+# DEBUG
 # =====================================================
 with st.expander("📡 Raw MQTT Responses"):
     st.text_area(
         "Responses",
-        value="\n\n---\n\n".join(
-        payload for _, payload in st.session_state.response_log),
+        value="\n\n---\n\n".join(p for _, p in st.session_state.response_log),
         height=300
     )
+
 with st.expander("🧪 Parsing Debug Trace"):
     st.text_area(
         "Parser activity",
         value="\n".join(st.session_state.parse_debug),
         height=400
     )
+
 # =====================================================
 # INVERTER SETTINGS
 # =====================================================
@@ -263,20 +248,20 @@ st.divider()
 st.subheader("Inverter Settings")
 
 if st.button("Update"):
-    with st.spinner("Reading CT & Export limit..."):
-        st.session_state.parse_debug.clear()
-        st.session_state.parsed_payloads.clear()
+    st.session_state.parse_debug.clear()
+    st.session_state.parsed_payloads.clear()
 
-        publish("READ04**12345##1234567890,1032")
-        st.session_state.pending_register = "1032"
-        st.session_state.pending_since = time.time()
-    
+    publish("READ04**12345##1234567890,1032")
+    st.session_state.pending_register = "1032"
+    st.session_state.pending_action = "read_ct"
+    st.session_state.pending_since = time.time()
+
 ct_enabled = "Yes" if st.session_state.ct_power not in (None, 0) else "No"
-st.text_input("CT Enabled", ct_enabled, disabled=True)
 
+st.text_input("CT Enabled", ct_enabled, disabled=True)
 st.text_input(
     "Export Limit (W)",
-    str(st.session_state.export_limit or ""),
+    str(st.session_state.export_limit) if st.session_state.export_limit is not None else "",
     disabled=True
 )
 
@@ -284,38 +269,51 @@ st.text_input(
 # ZERO EXPORT CONTROL
 # =====================================================
 st.divider()
+st.subheader("Zero Export Control")
 
-if ct_enabled == "Yes":
-    new_val = st.number_input(
-        "Set Export Limit (W)",
-        min_value=1,
-        max_value=10000,
-        value=st.session_state.export_limit or 1
+can_control = (
+    st.session_state.ct_power not in (None, 0)
+    and st.session_state.export_limit is not None
+)
+
+col1, col2 = st.columns(2)
+
+with col1:
+    enable_clicked = st.button(
+        "Enable Zero Export (1W)",
+        disabled=not can_control
     )
 
-    if st.button("Apply Export Setting"):
-        with st.spinner("Applying..."):
-            publish("UP#,1536:02014")
-            publish(f"UP#,1540:{new_val:05d}")
-            publish("UP#,1536:00001")
+with col2:
+    disable_clicked = st.button(
+        "Disable Zero Export (10000W)",
+        disabled=not can_control
+    )
 
-            publish("READ03**12345##1234567890,0802")
-            verify = wait_for_register("0802")
+if enable_clicked:
+    st.session_state.parse_debug.clear()
+    st.session_state.parsed_payloads.clear()
 
-        if verify == new_val:
-            st.success("Export value updated successfully")
-            st.session_state.export_limit = verify
-        else:
-            st.error("Export update failed")
-else:
-    st.info("CT not enabled. Zero export unavailable.")
+    publish("UP#,1536:02014")
+    publish("UP#,1540:00001")
+    publish("UP#,1536:00001")
+    publish("READ03**12345##1234567890,0802")
 
+    st.session_state.pending_register = "0802"
+    st.session_state.pending_action = "enable"
+    st.session_state.expected_export_value = 1
+    st.session_state.pending_since = time.time()
 
+if disable_clicked:
+    st.session_state.parse_debug.clear()
+    st.session_state.parsed_payloads.clear()
 
+    publish("UP#,1536:02014")
+    publish("UP#,1540:10000")
+    publish("UP#,1536:00001")
+    publish("READ03**12345##1234567890,0802")
 
-
-
-
-
-
-
+    st.session_state.pending_register = "0802"
+    st.session_state.pending_action = "disable"
+    st.session_state.expected_export_value = 10000
+    st.session_state.pending_since = time.time()
