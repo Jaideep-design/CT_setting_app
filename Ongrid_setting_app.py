@@ -216,10 +216,10 @@ if st.button("Connect", disabled=st.session_state.connected):
     mqtt_connect(device)
 
 if not st.session_state.connected:
-    st.warning("Not connected")
-    st.stop()
+    st.warning("Connecting to MQTT…")
+else:
+    st.success("Connected to MQTT")
 
-st.success("Connected to MQTT")
 
 # =====================================================
 # DEBUG
@@ -314,6 +314,7 @@ if disable_clicked:
     st.session_state.pending_action = "disable"
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
+
 
 
 
