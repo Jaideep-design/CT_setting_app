@@ -191,7 +191,8 @@ else:
 with st.expander("📡 Raw MQTT Responses"):
     st.text_area(
         "Responses",
-        value="\n\n---\n\n".join(st.session_state.response_log),
+        value="\n\n---\n\n".join(
+        payload for _, payload in st.session_state.response_log),
         height=300
     )
 with st.expander("🧪 Parsing Debug Trace"):
@@ -258,6 +259,7 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
 
 
 
