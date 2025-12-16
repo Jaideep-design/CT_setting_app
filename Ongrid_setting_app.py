@@ -179,16 +179,18 @@ def run_state_machine():
 
         if payload in st.session_state.parsed_payloads:
             continue
-
+    
         st.session_state.parsed_payloads.add(payload)
+    
         # =====================================================
-        # WAIT FOR UP PROCESSED (no READ yet)
+        # WAIT FOR UP PROCESSED (event-based)
         # =====================================================
         if st.session_state.state == "WAIT_UP_PROCESSED":
             if is_up_processed(payload):
-                # ✅ Commit confirmed → send ONE READ
+                st.session_state.parse_debug.append("🔐 UP PROCESSED received")
+    
                 publish("READ03**12345##1234567890,0802")
-        
+    
                 st.session_state.state = "VERIFY_EXPORT_ONCE"
                 st.session_state.pending_register = "0802"
                 st.session_state.pending_since = time.time()
@@ -196,7 +198,10 @@ def run_state_machine():
                 break
             else:
                 continue
-
+    
+        # =====================================================
+        # REGISTER-BASED STATES
+        # =====================================================
         value = extract_register(payload, st.session_state.pending_register)
         if value is None:
             continue
@@ -392,5 +397,6 @@ if st.session_state.state == "WRITE_LOCK":
         st.session_state.state = "WAIT_UP_PROCESSED"
         st.session_state.pending_register = None
         st.session_state.pending_since = time.time()
+
 
 
