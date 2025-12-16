@@ -4,6 +4,7 @@ import queue
 import paho.mqtt.client as mqtt
 import warnings
 from streamlit_autorefresh import st_autorefresh
+import json
 
 warnings.filterwarnings("ignore")
 
@@ -101,7 +102,18 @@ def extract_register_value(payload: str, register: str):
                 return None
 
     return None
+    
+def drain_rx_queue():
+    while not st.session_state.rx_queue.empty():
+        event, payload = st.session_state.rx_queue.get()
 
+        if event == "CONNECTED":
+            st.session_state.connected = True
+
+        elif event == "MSG":
+            st.session_state.response_log.append(payload)
+            st.session_state.response_log = st.session_state.response_log[-MAX_LOG_LINES:]
+            
 def wait_for_register(register, timeout=6):
     start = time.time()
     seen = set()
@@ -109,13 +121,7 @@ def wait_for_register(register, timeout=6):
     while time.time() - start < timeout:
 
         # 🔥 CRITICAL: process MQTT messages WHILE waiting
-        while not st.session_state.rx_queue.empty():
-            event, payload = st.session_state.rx_queue.get()
-
-            if event == "MSG":
-                st.session_state.response_log.append(payload)
-                st.session_state.response_log = st.session_state.response_log[-100:]
-
+        drain_rx_queue()
         # Now parse updated log
         for payload in st.session_state.response_log:
             if payload in seen:
@@ -129,7 +135,6 @@ def wait_for_register(register, timeout=6):
         time.sleep(0.1)
 
     return None
-
 # =====================================================
 # UI
 # =====================================================
@@ -146,20 +151,7 @@ if st.button("Connect", disabled=st.session_state.connected):
 # =====================================================
 if st.session_state.mqtt_client:
     st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
-
-# =====================================================
-# PROCESS MQTT EVENTS
-# =====================================================
-while not st.session_state.rx_queue.empty():
-    event, payload = st.session_state.rx_queue.get()
-
-    if event == "CONNECTED":
-        st.session_state.connected = True
-
-    elif event == "MSG":
-        st.session_state.response_log.append(payload)
-        st.session_state.response_log = st.session_state.response_log[-MAX_LOG_LINES:]
-
+    drain_rx_queue()
 # =====================================================
 # STATUS
 # =====================================================
@@ -187,9 +179,12 @@ st.subheader("Inverter Settings")
 
 if st.button("Update"):
     with st.spinner("Reading CT & Export limit..."):
+
+        st.session_state.response_log.clear()
         publish("READ04**12345##1234567890,1032")
         st.session_state.ct_power = wait_for_register("1032")
 
+        st.session_state.response_log.clear()
         publish("READ03**12345##1234567890,0802")
         st.session_state.export_limit = wait_for_register("0802")
 
@@ -231,5 +226,6 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
 
 
