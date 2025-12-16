@@ -67,15 +67,17 @@ def mqtt_connect(device_id):
     cmd = f"/AC/5/{device_id}/Command"
     rsp = f"/AC/5/{device_id}/Response"
 
+    rx_queue = st.session_state.rx_queue  # 👈 capture once
+
     client = mqtt.Client()
 
     def on_connect(client, userdata, flags, rc):
         if rc == 0:
             client.subscribe(rsp)
-            st.session_state.rx_queue.put(("CONNECTED", None))
+            rx_queue.put(("CONNECTED", None))  # ✅ SAFE
 
     def on_message(client, userdata, msg):
-        st.session_state.rx_queue.put(("MSG", msg.payload.decode(errors="ignore")))
+        rx_queue.put(("MSG", msg.payload.decode(errors="ignore")))  # ✅ SAFE
 
     client.on_connect = on_connect
     client.on_message = on_message
@@ -306,3 +308,4 @@ if disable_clicked:
     st.session_state.pending_action = "disable"
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
+
