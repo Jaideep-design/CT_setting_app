@@ -34,6 +34,7 @@ def init_state():
         "ct_power": None,
         "export_limit": None,
         "last_cmd_ts": None,
+        "parse_debug": []
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -84,27 +85,42 @@ def publish(cmd):
 # RESPONSE HANDLING
 # =====================================================
 def extract_register_value(payload: str, register: str):
+    debug = st.session_state.parse_debug
+
+    debug.append("---- NEW PAYLOAD ----")
+    debug.append(payload)
+
     if not payload:
+        debug.append("Payload empty → ignored")
         return None
 
     try:
         data = json.loads(payload)
         rsp = data.get("rsp", "")
-    except json.JSONDecodeError:
+        debug.append(f"Parsed JSON rsp:\n{rsp}")
+    except json.JSONDecodeError as e:
+        debug.append(f"JSON decode error: {e}")
         return None
 
-    # 🔥 IGNORE interim responses
+    # Ignore interim responses
     if "READ PROCESSING" in rsp:
+        debug.append("Found READ PROCESSING → ignored")
         return None
 
     for line in rsp.splitlines():
         line = line.strip()
+        debug.append(f"Checking line: '{line}'")
+
         if line.startswith(f"{register}:"):
             try:
-                return int(line.split(":")[1])
-            except ValueError:
+                value = int(line.split(":")[1])
+                debug.append(f"✅ MATCH FOUND → {register} = {value}")
+                return value
+            except ValueError as e:
+                debug.append(f"Value parse error: {e}")
                 return None
 
+    debug.append(f"❌ No register {register} found")
     return None
     
 def drain_rx_queue():
@@ -174,7 +190,12 @@ with st.expander("📡 Raw MQTT Responses"):
         value="\n\n---\n\n".join(st.session_state.response_log),
         height=300
     )
-
+with st.expander("🧪 Parsing Debug Trace"):
+    st.text_area(
+        "Parser activity",
+        value="\n".join(st.session_state.parse_debug),
+        height=400
+    )
 # =====================================================
 # INVERTER SETTINGS
 # =====================================================
@@ -185,10 +206,13 @@ if st.button("Update"):
     with st.spinner("Reading CT & Export limit..."):
 
         st.session_state.response_log.clear()
+        st.session_state.parse_debug.clear()
+
         publish("READ04**12345##1234567890,1032")
         st.session_state.ct_power = wait_for_register("1032")
 
         st.session_state.response_log.clear()
+
         publish("READ03**12345##1234567890,0802")
         st.session_state.export_limit = wait_for_register("0802")
 
@@ -230,6 +254,7 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
 
 
 
