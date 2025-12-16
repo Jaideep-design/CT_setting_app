@@ -55,7 +55,8 @@ def init_state():
         "write_password": "",
         "write_unlocked": False,
         "write_value": None,
-        "lock_sent_at": None
+        "lock_sent_at": None,
+        "response_cursor": 0
     }
 
     for k, v in defaults.items():
@@ -181,19 +182,19 @@ def run_state_machine():
         return
 
 
-    for ts, payload in st.session_state.response_log:
-
+    for ts, payload in st.session_state.response_log[st.session_state.response_cursor:]:
+        st.session_state.response_cursor += 1  # ✅ advance once per payload
+    
         if payload in st.session_state.parsed_payloads:
             continue
     
         st.session_state.parsed_payloads.add(payload)
-    
+
         # =====================================================
         # WAIT FOR *FINAL* UP PROCESSED (after LOCK)
         # =====================================================
         if st.session_state.state == "WAIT_UP_PROCESSED":
-        
-            # Only consider responses AFTER lock was sent
+
             if ts < st.session_state.lock_sent_at:
                 continue
         
@@ -309,6 +310,7 @@ st.subheader("Inverter Settings")
 if st.button("Update", disabled=st.session_state.state != "CONNECTED"):
     st.session_state.parse_debug.clear()
     st.session_state.parsed_payloads.clear()
+    st.session_state.response_cursor = len(st.session_state.response_log)
 
     publish("READ04**12345##1234567890,1032")
     st.session_state.pending_register = "1032"
@@ -406,9 +408,11 @@ if st.session_state.state == "WRITE_LOCK":
     if st.button("Lock & Apply"):
         lock_ts = time.time()
         publish("UP#,1536:00001")
-        
-        st.session_state.lock_sent_at = lock_ts
+
+        st.session_state.lock_sent_at = lock_ts          
         st.session_state.state = "WAIT_UP_PROCESSED"
         st.session_state.pending_register = None
         st.session_state.pending_since = lock_ts
+
         st.session_state.parsed_payloads.clear()
+        st.session_state.response_cursor = len(st.session_state.response_log)
