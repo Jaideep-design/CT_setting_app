@@ -1,58 +1,62 @@
 import streamlit as st
 import time
 import queue
-import paho.mqtt.client as mqtt
-import warnings
-from streamlit_autorefresh import st_autorefresh
 import json
 import re
-st.set_page_config("Solax Zero Export Control", layout="centered")
-GLOBAL_RX_QUEUE = queue.Queue()
+import paho.mqtt.client as mqtt
+from streamlit_autorefresh import st_autorefresh
+import warnings
 
 warnings.filterwarnings("ignore")
 
-# =====================================================
-# CONFIG
-# =====================================================
+st.set_page_config("Solax Zero Export Control", layout="centered")
+
 MQTT_BROKER = "ecozen.ai"
 MQTT_PORT = 1883
 
-TOPIC_PREFIX = "EZMCOGX"
-DEVICE_TOPICS = [f"{TOPIC_PREFIX}{i:06d}" for i in range(1, 101)]
-
 AUTO_REFRESH_MS = 500
 MAX_LOG_LINES = 100
-TIMEOUT_SECONDS = 6
+TIMEOUT = 6
+
+TOPIC_PREFIX = "EZMCOGX"
+DEVICE_TOPICS = [f"{TOPIC_PREFIX}{i:06d}" for i in range(1, 101)]
 
 # =====================================================
 # SESSION STATE INIT
 # =====================================================
 def init_state():
     defaults = {
+        # mqtt
         "mqtt_client": None,
-        "connected": False,
-        "command_topic": None,
-        "response_topic": None,
-        # "rx_queue": queue.Queue(),
-        "response_log": [],              # (ts, payload)
-        "parse_debug": [],
-        "parsed_payloads": set(),
+        "rx_queue": queue.Queue(),
 
+        # connection
+        "state": "IDLE",     # IDLE | CONNECTING | CONNECTED | READ_CT | READ_EXPORT | ENABLE | DISABLE
+        "command_topic": None,
+
+        # data
         "ct_power": None,
         "export_limit": None,
 
-        "pending_register": None,        # "1032" | "0802"
-        "pending_action": None,          # read_ct | read_export | enable | disable
-        "expected_export_value": None,
+        # parsing
+        "pending_register": None,
         "pending_since": None,
+        "parsed_payloads": set(),
+
+        # logs
+        "response_log": [],
+        "parse_debug": [],
+
+        # validation
+        "expected_export_value": None,
     }
 
     for k, v in defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
 
+
 init_state()
-st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
 # =====================================================
 # MQTT SETUP
 # =====================================================
@@ -60,18 +64,18 @@ def mqtt_connect(device_id):
     if st.session_state.mqtt_client:
         return
 
-    cmd_topic = f"/AC/5/{device_id}/Command"
-    rsp_topic = f"/AC/5/{device_id}/Response"
+    cmd = f"/AC/5/{device_id}/Command"
+    rsp = f"/AC/5/{device_id}/Response"
 
     client = mqtt.Client()
 
     def on_connect(client, userdata, flags, rc):
         if rc == 0:
-            client.subscribe(rsp_topic)
-            GLOBAL_RX_QUEUE.put(("CONNECTED", None))
+            client.subscribe(rsp)
+            st.session_state.rx_queue.put(("CONNECTED", None))
 
     def on_message(client, userdata, msg):
-        GLOBAL_RX_QUEUE.put(("MSG", msg.payload.decode(errors="ignore")))
+        st.session_state.rx_queue.put(("MSG", msg.payload.decode(errors="ignore")))
 
     client.on_connect = on_connect
     client.on_message = on_message
@@ -79,7 +83,8 @@ def mqtt_connect(device_id):
     client.loop_start()
 
     st.session_state.mqtt_client = client
-    st.session_state.command_topic = cmd_topic
+    st.session_state.command_topic = cmd
+    st.session_state.state = "CONNECTING"
 
 def publish(cmd):
     st.session_state.mqtt_client.publish(
@@ -92,11 +97,11 @@ def publish(cmd):
 # RX QUEUE DRAIN
 # =====================================================
 def drain_rx_queue():
-    while not GLOBAL_RX_QUEUE.empty():
-        event, payload = GLOBAL_RX_QUEUE.get()
+    while not st.session_state.rx_queue.empty():
+        event, payload = st.session_state.rx_queue.get()
 
         if event == "CONNECTED":
-            st.session_state.connected = True
+            st.session_state.state = "CONNECTED"
 
         elif event == "MSG":
             st.session_state.response_log.append((time.time(), payload))
@@ -105,105 +110,93 @@ def drain_rx_queue():
 # =====================================================
 # RESPONSE PARSING
 # =====================================================
-def extract_register_value(payload: str, register: str):
-    debug = st.session_state.parse_debug
+def extract_register(payload, register):
+    dbg = st.session_state.parse_debug
 
-    debug.append("---- NEW PAYLOAD ----")
-    debug.append(payload)
-
-    rsp = None
+    dbg.append("---- PAYLOAD ----")
+    dbg.append(payload)
 
     try:
-        data = json.loads(payload)
-        rsp = data.get("rsp", "")
-        debug.append("Parsed via json.loads()")
-    except Exception as e:
-        debug.append(f"JSON decode failed: {e}")
-        match = re.search(r'"rsp"\s*:\s*"([\s\S]*)"\s*}', payload)
-        if not match:
-            debug.append("Failed to extract rsp")
+        rsp = json.loads(payload).get("rsp", "")
+        dbg.append("JSON OK")
+    except Exception:
+        m = re.search(r'"rsp"\s*:\s*"([\s\S]*)"\s*}', payload)
+        if not m:
+            dbg.append("No rsp")
             return None
-        rsp = match.group(1)
-        debug.append("Parsed rsp via regex fallback")
-
-    debug.append("Parsed rsp:")
-    debug.append(rsp)
+        rsp = m.group(1)
 
     if "READ PROCESSING" in rsp:
-        debug.append("Found READ PROCESSING → ignored")
+        dbg.append("Processing → ignore")
         return None
 
     for line in rsp.splitlines():
-        line = line.strip()
-        debug.append(f"Checking line: {line}")
         if line.startswith(f"{register}:"):
-            value = int(line.split(":")[1])
-            debug.append(f"✅ MATCH FOUND → {register} = {value}")
-            return value
+            val = int(line.split(":")[1])
+            dbg.append(f"FOUND {register}={val}")
+            return val
 
-    return None    
-
-drain_rx_queue()
+    return None
 # =====================================================
 # EVENT-DRIVEN PARSER
 # =====================================================
-if st.session_state.pending_register:
-    now = time.time()
+def run_state_machine():
+    if not st.session_state.pending_register:
+        return
 
-    if now - st.session_state.pending_since > TIMEOUT_SECONDS:
-        st.session_state.parse_debug.append("⏱️ Timeout waiting for response")
+    if time.time() - st.session_state.pending_since > TIMEOUT:
+        st.session_state.parse_debug.append("⏱ TIMEOUT")
         st.session_state.pending_register = None
-        st.session_state.pending_action = None
-        st.session_state.expected_export_value = None
+        st.session_state.state = "CONNECTED"
         st.session_state.parsed_payloads.clear()
+        return
 
-    else:
-        for ts, payload in st.session_state.response_log:
-            if payload in st.session_state.parsed_payloads:
-                continue
+    for ts, payload in st.session_state.response_log:
+        if payload in st.session_state.parsed_payloads:
+            continue
 
-            st.session_state.parsed_payloads.add(payload)
-            value = extract_register_value(payload, st.session_state.pending_register)
+        st.session_state.parsed_payloads.add(payload)
 
-            if value is None:
-                continue
+        value = extract_register(payload, st.session_state.pending_register)
+        if value is None:
+            continue
 
-            # ----------------------------
-            # READ CT → then READ EXPORT
-            # ----------------------------
-            if st.session_state.pending_action == "read_ct":
-                st.session_state.ct_power = value
+        # ---------- STATE TRANSITIONS ----------
+        if st.session_state.state == "READ_CT":
+            st.session_state.ct_power = value
 
-                publish("READ03**12345##1234567890,0802")
-                st.session_state.pending_register = "0802"
-                st.session_state.pending_action = "read_export"
-                st.session_state.pending_since = time.time()
-                st.session_state.parsed_payloads.clear()
-                break
+            publish("READ03**12345##1234567890,0802")
+            st.session_state.pending_register = "0802"
+            st.session_state.pending_since = time.time()
+            st.session_state.state = "READ_EXPORT"
+            st.session_state.parsed_payloads.clear()
+            break
 
-            elif st.session_state.pending_action == "read_export":
-                st.session_state.export_limit = value
-                st.session_state.pending_register = None
-                st.session_state.pending_action = None
-                st.session_state.parsed_payloads.clear()
-                break
+        elif st.session_state.state == "READ_EXPORT":
+            st.session_state.export_limit = value
+            st.session_state.pending_register = None
+            st.session_state.state = "CONNECTED"
+            st.session_state.parsed_payloads.clear()
+            break
 
-            # ----------------------------
-            # ENABLE / DISABLE VALIDATION
-            # ----------------------------
-            elif st.session_state.pending_action in ("enable", "disable"):
-                st.session_state.export_limit = value
+        elif st.session_state.state in ("ENABLE", "DISABLE"):
+            st.session_state.export_limit = value
 
-                if value == st.session_state.expected_export_value:
-                    st.success("Export setting updated successfully")
-                else:
-                    st.error("Export setting update failed")
+            if value == st.session_state.expected_export_value:
+                st.success("Export updated successfully")
+            else:
+                st.error("Export update failed")
 
-                st.session_state.pending_register = None
-                st.session_state.pending_action = None
-                st.session_state.expected_export_value = None
-                st.session_state.parsed_payloads.clear()
-                break
+            st.session_state.pending_register = None
+            st.session_state.state = "CONNECTED"
+            st.session_state.expected_export_value = None
+            st.session_state.parsed_payloads.clear()
+            break
+            
+if st.session_state.mqtt_client:
+    st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
+    drain_rx_queue()
+    run_state_machine()
 
 # =====================================================
 # UI
@@ -212,14 +205,13 @@ st.title("🔌 Solax Inverter – Zero Export Control")
 
 device = st.selectbox("Select Device", DEVICE_TOPICS)
 
-if st.button("Connect", disabled=st.session_state.connected):
+if st.button("Connect", disabled=st.session_state.state != "IDLE"):
     mqtt_connect(device)
 
-if not st.session_state.connected:
-    st.warning("Connecting to MQTT…")
+if st.session_state.state in ("CONNECTING", "IDLE"):
+    st.warning("Connecting…")
 else:
-    st.success("Connected to MQTT")
-
+    st.success("Connected")
 
 # =====================================================
 # DEBUG
@@ -244,14 +236,14 @@ with st.expander("🧪 Parsing Debug Trace"):
 st.divider()
 st.subheader("Inverter Settings")
 
-if st.button("Update"):
+if st.button("Update", disabled=st.session_state.state != "CONNECTED"):
     st.session_state.parse_debug.clear()
     st.session_state.parsed_payloads.clear()
 
     publish("READ04**12345##1234567890,1032")
     st.session_state.pending_register = "1032"
-    st.session_state.pending_action = "read_ct"
     st.session_state.pending_since = time.time()
+    st.session_state.state = "READ_CT"
 
 ct_enabled = "Yes" if st.session_state.ct_power not in (None, 0) else "No"
 
@@ -314,8 +306,3 @@ if disable_clicked:
     st.session_state.pending_action = "disable"
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
-
-
-
-
-
