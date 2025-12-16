@@ -91,7 +91,11 @@ def extract_register_value(payload: str, register: str):
         data = json.loads(payload)
         rsp = data.get("rsp", "")
     except json.JSONDecodeError:
-        rsp = payload  # fallback for non-JSON messages
+        return None
+
+    # 🔥 IGNORE interim responses
+    if "READ PROCESSING" in rsp:
+        return None
 
     for line in rsp.splitlines():
         line = line.strip()
@@ -226,6 +230,7 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
 
 
 
