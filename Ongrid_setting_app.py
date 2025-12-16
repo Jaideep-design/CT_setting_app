@@ -54,7 +54,8 @@ def init_state():
         "write_mode": None,          # "enable" | "disable"
         "write_password": "",
         "write_unlocked": False,
-        "write_value": None
+        "write_value": None,
+        "lock_sent_at": None
     }
 
     for k, v in defaults.items():
@@ -169,11 +170,16 @@ def run_state_machine():
 
     # ⏱ timeout guard
     if time.time() - st.session_state.pending_since > TIMEOUT:
-        st.session_state.parse_debug.append("⏱ TIMEOUT")
+        if st.session_state.state == "WAIT_UP_PROCESSED":
+            st.session_state.parse_debug.append("⏱ TIMEOUT waiting for UP PROCESSED")
+        else:
+            st.session_state.parse_debug.append("⏱ TIMEOUT waiting for register")
+    
         st.session_state.pending_register = None
         st.session_state.state = "CONNECTED"
         st.session_state.parsed_payloads.clear()
         return
+
 
     for ts, payload in st.session_state.response_log:
 
@@ -183,21 +189,28 @@ def run_state_machine():
         st.session_state.parsed_payloads.add(payload)
     
         # =====================================================
-        # WAIT FOR UP PROCESSED (event-based)
+        # WAIT FOR *FINAL* UP PROCESSED (after LOCK)
         # =====================================================
         if st.session_state.state == "WAIT_UP_PROCESSED":
+        
+            # Only consider responses AFTER lock was sent
+            if ts < st.session_state.lock_sent_at:
+                continue
+        
             if is_up_processed(payload):
-                st.session_state.parse_debug.append("🔐 UP PROCESSED received")
-    
+                st.session_state.parse_debug.append(
+                    "🔐 Final UP PROCESSED received → verifying export"
+                )
+        
                 publish("READ03**12345##1234567890,0802")
-    
+        
                 st.session_state.state = "VERIFY_EXPORT_ONCE"
                 st.session_state.pending_register = "0802"
                 st.session_state.pending_since = time.time()
                 st.session_state.parsed_payloads.clear()
                 break
-            else:
-                continue
+        
+            continue
     
         # =====================================================
         # REGISTER-BASED STATES
@@ -391,12 +404,11 @@ if st.session_state.state == "WRITE_LOCK":
     st.subheader("🔒 Lock Settings")
 
     if st.button("Lock & Apply"):
+        lock_ts = time.time()
         publish("UP#,1536:00001")
-
-        # ⛔ Do NOT read yet
+        
+        st.session_state.lock_sent_at = lock_ts
         st.session_state.state = "WAIT_UP_PROCESSED"
         st.session_state.pending_register = None
-        st.session_state.pending_since = time.time()
-
-
-
+        st.session_state.pending_since = lock_ts
+        st.session_state.parsed_payloads.clear()
