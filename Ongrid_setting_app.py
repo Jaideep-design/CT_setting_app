@@ -6,6 +6,7 @@ import warnings
 from streamlit_autorefresh import st_autorefresh
 import json
 import re
+st.set_page_config("Solax Zero Export Control", layout="centered")
 GLOBAL_RX_QUEUE = queue.Queue()
 
 warnings.filterwarnings("ignore")
@@ -144,7 +145,7 @@ def extract_register_value(payload: str, register: str):
 
 if st.session_state.mqtt_client:
     st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
-    drain_rx_queue()
+    # drain_rx_queue()
     
 # =====================================================
 # EVENT-DRIVEN PARSER
@@ -210,13 +211,19 @@ if st.session_state.pending_register:
 # =====================================================
 # UI
 # =====================================================
-st.set_page_config("Solax Zero Export Control", layout="centered")
 st.title("🔌 Solax Inverter – Zero Export Control")
 
 device = st.selectbox("Select Device", DEVICE_TOPICS)
 
 if st.button("Connect", disabled=st.session_state.connected):
     mqtt_connect(device)
+
+# Auto refresh if client exists
+if st.session_state.mqtt_client:
+    st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
+
+# 🔴 CRITICAL: always drain BEFORE checking connected
+drain_rx_queue()
 
 if not st.session_state.connected:
     st.warning("Not connected")
@@ -317,5 +324,6 @@ if disable_clicked:
     st.session_state.pending_action = "disable"
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
+
 
 
