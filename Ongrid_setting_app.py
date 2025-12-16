@@ -131,7 +131,9 @@ def drain_rx_queue():
             st.session_state.connected = True
 
         elif event == "MSG":
-            st.session_state.response_log.append(payload)
+            st.session_state.response_log.append(
+                (time.time(), payload)
+            )
             st.session_state.response_log = st.session_state.response_log[-MAX_LOG_LINES:]
             
 def wait_for_register(register, timeout=6):
@@ -139,11 +141,13 @@ def wait_for_register(register, timeout=6):
     seen = set()
 
     while time.time() - start < timeout:
-
-        # 🔥 CRITICAL: process MQTT messages WHILE waiting
         drain_rx_queue()
-        # Now parse updated log
-        for payload in st.session_state.response_log:
+
+        for ts, payload in st.session_state.response_log:
+            # 🔥 Only parse messages AFTER command was sent
+            if ts < st.session_state.last_cmd_ts:
+                continue
+
             if payload in seen:
                 continue
             seen.add(payload)
@@ -205,13 +209,13 @@ st.subheader("Inverter Settings")
 if st.button("Update"):
     with st.spinner("Reading CT & Export limit..."):
 
-        st.session_state.response_log.clear()
+        # st.session_state.response_log.clear()
         st.session_state.parse_debug.clear()
 
         publish("READ04**12345##1234567890,1032")
         st.session_state.ct_power = wait_for_register("1032")
 
-        st.session_state.response_log.clear()
+        # st.session_state.response_log.clear()
 
         publish("READ03**12345##1234567890,0802")
         st.session_state.export_limit = wait_for_register("0802")
@@ -254,6 +258,7 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
 
 
 
