@@ -83,13 +83,23 @@ def publish(cmd):
 # RESPONSE HANDLING
 # =====================================================
 def extract_register_value(payload: str, register: str):
-    for line in payload.splitlines():
+    if not payload:
+        return None
+
+    try:
+        data = json.loads(payload)
+        rsp = data.get("rsp", "")
+    except json.JSONDecodeError:
+        rsp = payload  # fallback for non-JSON messages
+
+    for line in rsp.splitlines():
         line = line.strip()
         if line.startswith(f"{register}:"):
             try:
                 return int(line.split(":")[1])
             except ValueError:
                 return None
+
     return None
 
 def wait_for_register(register, timeout=6):
@@ -211,3 +221,4 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
