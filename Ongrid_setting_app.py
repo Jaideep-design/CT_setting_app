@@ -89,11 +89,16 @@ def mqtt_connect(device_id):
     st.session_state.state = "CONNECTING"
 
 def publish(cmd):
+    # 🔍 DEBUG: log every outgoing command
+    ts = time.time()
+    st.session_state.parse_debug.append(f"📤 [{ts:.3f}] SENT → {cmd}")
+
     st.session_state.mqtt_client.publish(
         st.session_state.command_topic,
         cmd,
         qos=1
     )
+
 
 # =====================================================
 # RX QUEUE DRAIN
@@ -150,7 +155,11 @@ def is_up_processed(payload: str) -> bool:
 # EVENT-DRIVEN PARSER
 # =====================================================
 def run_state_machine():
-    if not st.session_state.pending_register:
+    # Allow WAIT_UP_LOCK to run without pending_register
+    if (
+        not st.session_state.pending_register
+        and st.session_state.state != "WAIT_UP_LOCK"
+    ):
         return
 
     # ⏱ timeout guard
@@ -360,3 +369,4 @@ if disable_clicked:
     st.session_state.pending_register = None
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
+
