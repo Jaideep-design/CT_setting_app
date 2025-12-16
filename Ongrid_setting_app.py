@@ -161,7 +161,10 @@ def is_up_processed(payload: str) -> bool:
 # EVENT-DRIVEN PARSER
 # =====================================================
 def run_state_machine():
-    if not st.session_state.pending_register:
+    if (
+        not st.session_state.pending_register
+        and st.session_state.state not in ("WAIT_UP_PROCESSED",)
+    ):
         return
 
     # ⏱ timeout guard
@@ -178,6 +181,21 @@ def run_state_machine():
             continue
 
         st.session_state.parsed_payloads.add(payload)
+        # =====================================================
+        # WAIT FOR UP PROCESSED (no READ yet)
+        # =====================================================
+        elif st.session_state.state == "WAIT_UP_PROCESSED":
+            if is_up_processed(payload):
+                # ✅ Commit confirmed → send ONE READ
+                publish("READ03**12345##1234567890,0802")
+        
+                st.session_state.state = "VERIFY_EXPORT_ONCE"
+                st.session_state.pending_register = "0802"
+                st.session_state.pending_since = time.time()
+                st.session_state.parsed_payloads.clear()
+                break
+            else:
+                continue
 
         value = extract_register(payload, st.session_state.pending_register)
         if value is None:
@@ -205,25 +223,27 @@ def run_state_machine():
             break
 
         # =====================================================
-        # VERIFY WRITE (FINAL STEP)
+        # VERIFY EXPORT (SINGLE READ ONLY)
         # =====================================================
-        elif st.session_state.state == "VERIFY_EXPORT":
+        elif st.session_state.state == "VERIFY_EXPORT_ONCE":
+        
             if value == st.session_state.write_value:
                 st.session_state.export_limit = value
                 st.success("Export limit updated successfully")
-
-                st.session_state.state = "CONNECTED"
-                st.session_state.pending_register = None
-                st.session_state.write_mode = None
-                st.session_state.write_unlocked = False
-                st.session_state.write_value = None
-                st.session_state.parsed_payloads.clear()
-                break
+        
             else:
-                publish("READ03**12345##1234567890,0802")
-                st.session_state.pending_since = time.time()
-                st.session_state.parsed_payloads.clear()
-                break
+                st.error(
+                    f"Export verification failed. "
+                    f"Expected {st.session_state.write_value}, got {value}"
+                )
+        
+            # ✅ End verification — no retries
+            st.session_state.state = "CONNECTED"
+            st.session_state.pending_register = None
+            st.session_state.write_unlocked = False
+            st.session_state.write_value = None
+            st.session_state.parsed_payloads.clear()
+            break
             
 if st.session_state.mqtt_client:
     st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
@@ -353,13 +373,14 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
 
         publish(f"UP#,1540:{padded_val}")
         st.session_state.state = "WRITE_LOCK"
-# --------------LOCK---------------------------------------
+# -------------- LOCK ---------------------------------------
 if st.session_state.state == "WRITE_LOCK":
     st.subheader("🔒 Lock Settings")
 
     if st.button("Lock & Apply"):
         publish("UP#,1536:00001")
 
-        st.session_state.state = "VERIFY_EXPORT"
-        st.session_state.pending_register = "0802"
+        # ⛔ Do NOT read yet
+        st.session_state.state = "WAIT_UP_PROCESSED"
+        st.session_state.pending_register = None
         st.session_state.pending_since = time.time()
