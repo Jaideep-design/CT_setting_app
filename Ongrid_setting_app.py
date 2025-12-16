@@ -6,6 +6,7 @@ import warnings
 from streamlit_autorefresh import st_autorefresh
 import json
 import re
+GLOBAL_RX_QUEUE = queue.Queue()
 
 warnings.filterwarnings("ignore")
 
@@ -31,7 +32,7 @@ def init_state():
         "connected": False,
         "command_topic": None,
         "response_topic": None,
-        "rx_queue": queue.Queue(),
+        # "rx_queue": queue.Queue(),
         "response_log": [],              # (ts, payload)
         "parse_debug": [],
         "parsed_payloads": set(),
@@ -66,10 +67,10 @@ def mqtt_connect(device_id):
     def on_connect(client, userdata, flags, rc):
         if rc == 0:
             client.subscribe(rsp_topic)
-            st.session_state.rx_queue.put(("CONNECTED", None))
+            GLOBAL_RX_QUEUE.put(("CONNECTED", None))
 
     def on_message(client, userdata, msg):
-        st.session_state.rx_queue.put(("MSG", msg.payload.decode(errors="ignore")))
+        GLOBAL_RX_QUEUE.put(("MSG", msg.payload.decode(errors="ignore")))
 
     client.on_connect = on_connect
     client.on_message = on_message
@@ -78,7 +79,6 @@ def mqtt_connect(device_id):
 
     st.session_state.mqtt_client = client
     st.session_state.command_topic = cmd_topic
-    st.session_state.response_topic = rsp_topic
 
 def publish(cmd):
     st.session_state.mqtt_client.publish(
@@ -91,8 +91,8 @@ def publish(cmd):
 # RX QUEUE DRAIN
 # =====================================================
 def drain_rx_queue():
-    while not st.session_state.rx_queue.empty():
-        event, payload = st.session_state.rx_queue.get()
+    while not GLOBAL_RX_QUEUE.empty():
+        event, payload = GLOBAL_RX_QUEUE.get()
 
         if event == "CONNECTED":
             st.session_state.connected = True
@@ -317,3 +317,4 @@ if disable_clicked:
     st.session_state.pending_action = "disable"
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
+
