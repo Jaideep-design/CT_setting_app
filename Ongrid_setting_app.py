@@ -107,14 +107,24 @@ def wait_for_register(register, timeout=6):
     seen = set()
 
     while time.time() - start < timeout:
+
+        # 🔥 CRITICAL: process MQTT messages WHILE waiting
+        while not st.session_state.rx_queue.empty():
+            event, payload = st.session_state.rx_queue.get()
+
+            if event == "MSG":
+                st.session_state.response_log.append(payload)
+                st.session_state.response_log = st.session_state.response_log[-100:]
+
+        # Now parse updated log
         for payload in st.session_state.response_log:
             if payload in seen:
                 continue
             seen.add(payload)
 
-            val = extract_register_value(payload, register)
-            if val is not None:
-                return val
+            value = extract_register_value(payload, register)
+            if value is not None:
+                return value
 
         time.sleep(0.1)
 
@@ -221,4 +231,5 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
 
