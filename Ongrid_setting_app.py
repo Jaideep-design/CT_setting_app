@@ -352,27 +352,35 @@ if st.session_state.state == "WRITE_PASSWORD":
             st.success("Unlocked successfully")
         else:
             st.error("Invalid password")
-# ---------------Enter Export limit Value------------------------
+# --------------- Enter Export Limit Value ------------------------
 if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
     st.subheader("⚙️ Set Export Limit")
 
+    # ENABLE → fixed to 1 W
     if st.session_state.write_mode == "enable":
+        value = 1
+        st.session_state.write_value = 1
+        st.info("Zero export enabled → Export limit fixed to 1 W")
+
+        if st.button("Set Export Limit"):
+            publish("UP#,1540:00001")
+            st.session_state.state = "WRITE_LOCK"
+
+    # DISABLE → user chooses value
+    else:
         value = st.number_input(
             "Export Limit (W)",
             min_value=1,
             max_value=60000,
-            value=1
+            value=10000
         )
-    else:
-        value = 10000
-        st.info("Disable mode → Export limit fixed to 10000 W")
 
-    if st.button("Set Export Limit"):
-        padded_val = f"{value:05d}"
-        st.session_state.write_value = value
+        if st.button("Set Export Limit"):
+            padded_val = f"{value:05d}"
+            st.session_state.write_value = value
 
-        publish(f"UP#,1540:{padded_val}")
-        st.session_state.state = "WRITE_LOCK"
+            publish(f"UP#,1540:{padded_val}")
+            st.session_state.state = "WRITE_LOCK"
 # -------------- LOCK ---------------------------------------
 if st.session_state.state == "WRITE_LOCK":
     st.subheader("🔒 Lock Settings")
@@ -384,4 +392,5 @@ if st.session_state.state == "WRITE_LOCK":
         st.session_state.state = "WAIT_UP_PROCESSED"
         st.session_state.pending_register = None
         st.session_state.pending_since = time.time()
+
 
