@@ -146,14 +146,17 @@ def run_state_machine():
     if not st.session_state.pending_register:
         return
 
+    # ⏱ timeout guard
     if time.time() - st.session_state.pending_since > TIMEOUT:
         st.session_state.parse_debug.append("⏱ TIMEOUT")
         st.session_state.pending_register = None
         st.session_state.state = "CONNECTED"
+        st.session_state.expected_export_value = None
         st.session_state.parsed_payloads.clear()
         return
 
     for ts, payload in st.session_state.response_log:
+
         if payload in st.session_state.parsed_payloads:
             continue
 
@@ -163,7 +166,9 @@ def run_state_machine():
         if value is None:
             continue
 
-        # ---------- STATE TRANSITIONS ----------
+        # =====================================================
+        # READ CT → then READ EXPORT
+        # =====================================================
         if st.session_state.state == "READ_CT":
             st.session_state.ct_power = value
 
@@ -176,24 +181,33 @@ def run_state_machine():
 
         elif st.session_state.state == "READ_EXPORT":
             st.session_state.export_limit = value
+
             st.session_state.pending_register = None
             st.session_state.state = "CONNECTED"
             st.session_state.parsed_payloads.clear()
             break
 
-        elif st.session_state.state in ("ENABLE", "DISABLE"):
-            st.session_state.export_limit = value
+        # =====================================================
+        # ENABLE / DISABLE VERIFY  ✅ CORRECT PLACE
+        # =====================================================
+        elif st.session_state.state in ("ENABLE_VERIFY", "DISABLE_VERIFY"):
 
             if value == st.session_state.expected_export_value:
-                st.success("Export updated successfully")
-            else:
-                st.error("Export update failed")
+                st.session_state.export_limit = value
+                st.success("Export setting updated successfully")
 
-            st.session_state.pending_register = None
-            st.session_state.state = "CONNECTED"
-            st.session_state.expected_export_value = None
-            st.session_state.parsed_payloads.clear()
-            break
+                st.session_state.state = "CONNECTED"
+                st.session_state.pending_register = None
+                st.session_state.expected_export_value = None
+                st.session_state.parsed_payloads.clear()
+                break
+
+            else:
+                # 🔁 Not updated yet → poll again
+                publish("READ03**12345##1234567890,0802")
+                st.session_state.pending_since = time.time()
+                st.session_state.parsed_payloads.clear()
+                break
             
 if st.session_state.mqtt_client:
     st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
@@ -281,20 +295,23 @@ with col2:
         disabled=not can_control
     )
 
+# ---------------- ENABLE ----------------
 if enable_clicked:
     st.session_state.parse_debug.clear()
     st.session_state.parsed_payloads.clear()
 
+    # 🔥 Fire-and-forget UP commands
     publish("UP#,1536:02014")
     publish("UP#,1540:00001")
     publish("UP#,1536:00001")
-    publish("READ03**12345##1234567890,0802")
 
+    # ✅ Transition to VERIFY phase
+    st.session_state.state = "ENABLE_VERIFY"
     st.session_state.pending_register = "0802"
-    st.session_state.pending_action = "enable"
     st.session_state.expected_export_value = 1
     st.session_state.pending_since = time.time()
 
+# ---------------- DISABLE ----------------
 if disable_clicked:
     st.session_state.parse_debug.clear()
     st.session_state.parsed_payloads.clear()
@@ -302,10 +319,10 @@ if disable_clicked:
     publish("UP#,1536:02014")
     publish("UP#,1540:10000")
     publish("UP#,1536:00001")
-    publish("READ03**12345##1234567890,0802")
 
+    st.session_state.state = "DISABLE_VERIFY"
     st.session_state.pending_register = "0802"
-    st.session_state.pending_action = "disable"
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
+
 
