@@ -34,7 +34,9 @@ def init_state():
         "ct_power": None,
         "export_limit": None,
         "last_cmd_ts": None,
-        "parse_debug": []
+        "parse_debug": [],
+        "pending_register": None,
+        "pending_since": None
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -135,30 +137,42 @@ def drain_rx_queue():
                 (time.time(), payload)
             )
             st.session_state.response_log = st.session_state.response_log[-MAX_LOG_LINES:]
-            
-def wait_for_register(register, timeout=6):
-    start = time.time()
-    seen = set()
 
-    while time.time() - start < timeout:
-        drain_rx_queue()
+if st.session_state.pending_register:
+    for ts, payload in st.session_state.response_log:
+        if ts < st.session_state.pending_since:
+            continue
 
-        for ts, payload in st.session_state.response_log:
-            # 🔥 Only parse messages AFTER command was sent
-            if ts < st.session_state.last_cmd_ts:
-                continue
+        value = extract_register_value(payload, st.session_state.pending_register)
+        if value is not None:
+            st.session_state.ct_power = value
+            st.session_state.pending_register = None
+            st.session_state.pending_since = None
+            break
 
-            if payload in seen:
-                continue
-            seen.add(payload)
+# def wait_for_register(register, timeout=6):
+#     start = time.time()
+#     seen = set()
 
-            value = extract_register_value(payload, register)
-            if value is not None:
-                return value
+#     while time.time() - start < timeout:
+#         drain_rx_queue()
 
-        time.sleep(0.1)
+#         for ts, payload in st.session_state.response_log:
+#             # 🔥 Only parse messages AFTER command was sent
+#             if ts < st.session_state.last_cmd_ts:
+#                 continue
 
-    return None
+#             if payload in seen:
+#                 continue
+#             seen.add(payload)
+
+#             value = extract_register_value(payload, register)
+#             if value is not None:
+#                 return value
+
+#         time.sleep(0.1)
+
+#     return None
 # =====================================================
 # UI
 # =====================================================
@@ -208,19 +222,13 @@ st.divider()
 st.subheader("Inverter Settings")
 
 if st.button("Update"):
-    with st.spinner("Reading CT & Export limit..."):
+    st.session_state.response_log.clear()
+    st.session_state.parse_debug.clear()
 
-        # st.session_state.response_log.clear()
-        st.session_state.parse_debug.clear()
-
-        publish("READ04**12345##1234567890,1032")
-        st.session_state.ct_power = wait_for_register("1032")
-
-        # st.session_state.response_log.clear()
-
-        publish("READ03**12345##1234567890,0802")
-        st.session_state.export_limit = wait_for_register("0802")
-
+    publish("READ04**12345##1234567890,1032")
+    st.session_state.pending_register = "1032"
+    st.session_state.pending_since = time.time()
+    
 ct_enabled = "Yes" if st.session_state.ct_power not in (None, 0) else "No"
 st.text_input("CT Enabled", ct_enabled, disabled=True)
 
@@ -259,6 +267,7 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
 
 
 
