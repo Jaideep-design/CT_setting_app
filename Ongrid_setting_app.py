@@ -184,7 +184,7 @@ def run_state_machine():
         # =====================================================
         # WAIT FOR UP PROCESSED (no READ yet)
         # =====================================================
-        elif st.session_state.state == "WAIT_UP_PROCESSED":
+        if st.session_state.state == "WAIT_UP_PROCESSED":
             if is_up_processed(payload):
                 # ✅ Commit confirmed → send ONE READ
                 publish("READ03**12345##1234567890,0802")
@@ -384,3 +384,4 @@ if st.session_state.state == "WRITE_LOCK":
         st.session_state.state = "WAIT_UP_PROCESSED"
         st.session_state.pending_register = None
         st.session_state.pending_since = time.time()
+
