@@ -49,6 +49,12 @@ def init_state():
 
         # validation
         "expected_export_value": None,
+
+        # write
+        "write_mode": None,          # "enable" | "disable"
+        "write_password": "",
+        "write_unlocked": False,
+        "write_value": None
     }
 
     for k, v in defaults.items():
@@ -155,11 +161,7 @@ def is_up_processed(payload: str) -> bool:
 # EVENT-DRIVEN PARSER
 # =====================================================
 def run_state_machine():
-    # Allow WAIT_UP_LOCK to run without pending_register
-    if (
-        not st.session_state.pending_register
-        and st.session_state.state != "WAIT_UP_LOCK"
-    ):
+    if not st.session_state.pending_register:
         return
 
     # ⏱ timeout guard
@@ -167,7 +169,6 @@ def run_state_machine():
         st.session_state.parse_debug.append("⏱ TIMEOUT")
         st.session_state.pending_register = None
         st.session_state.state = "CONNECTED"
-        st.session_state.expected_export_value = None
         st.session_state.parsed_payloads.clear()
         return
 
@@ -183,38 +184,20 @@ def run_state_machine():
             continue
 
         # =====================================================
-        # UPDATE FLOW (Update button)
+        # UPDATE FLOW
         # =====================================================
         if st.session_state.state == "UPDATE_CT":
             st.session_state.ct_power = value
-        
+
             publish("READ03**12345##1234567890,0802")
             st.session_state.pending_register = "0802"
             st.session_state.pending_since = time.time()
             st.session_state.state = "UPDATE_EXPORT"
             st.session_state.parsed_payloads.clear()
             break
-        
+
         elif st.session_state.state == "UPDATE_EXPORT":
             st.session_state.export_limit = value
-        
-            st.session_state.pending_register = None
-            st.session_state.state = "CONNECTED"
-            st.session_state.parsed_payloads.clear()
-            break
-        # ---------------- READ CT (enable/disable flow) --------
-        elif st.session_state.state == "READ_CT":
-            st.session_state.ct_power = value
-        
-            publish("READ03**12345##1234567890,0802")
-            st.session_state.pending_register = "0802"
-            st.session_state.pending_since = time.time()
-            st.session_state.state = "READ_EXPORT"
-            st.session_state.parsed_payloads.clear()
-            break
-
-        elif st.session_state.state == "READ_EXPORT":
-            st.session_state.export_limit = value
 
             st.session_state.pending_register = None
             st.session_state.state = "CONNECTED"
@@ -222,35 +205,21 @@ def run_state_machine():
             break
 
         # =====================================================
-        # WAIT FOR FINAL UP LOCK (1536) TO COMPLETE
+        # VERIFY WRITE (FINAL STEP)
         # =====================================================
-        elif st.session_state.state == "WAIT_UP_LOCK":
-            if is_up_processed(payload):
-                # 🔐 Lock confirmed → now start verification
-                publish("READ03**12345##1234567890,0802")
-                st.session_state.pending_register = "0802"
-                st.session_state.pending_since = time.time()
-                st.session_state.state = "ENABLE_VERIFY"
-                st.session_state.parsed_payloads.clear()
-                break
-
-        # =====================================================
-        # ENABLE / DISABLE VERIFY  ✅ CORRECT PLACE
-        # =====================================================
-        elif st.session_state.state in ("ENABLE_VERIFY", "DISABLE_VERIFY"):
-
-            if value == st.session_state.expected_export_value:
+        elif st.session_state.state == "VERIFY_EXPORT":
+            if value == st.session_state.write_value:
                 st.session_state.export_limit = value
-                st.success("Export setting updated successfully")
+                st.success("Export limit updated successfully")
 
                 st.session_state.state = "CONNECTED"
                 st.session_state.pending_register = None
-                st.session_state.expected_export_value = None
+                st.session_state.write_mode = None
+                st.session_state.write_unlocked = False
+                st.session_state.write_value = None
                 st.session_state.parsed_payloads.clear()
                 break
-
             else:
-                # 🔁 Not updated yet → poll again
                 publish("READ03**12345##1234567890,0802")
                 st.session_state.pending_since = time.time()
                 st.session_state.parsed_payloads.clear()
@@ -331,42 +300,66 @@ can_control = (
 col1, col2 = st.columns(2)
 
 with col1:
-    enable_clicked = st.button(
-        "Enable Zero Export (1W)",
-        disabled=not can_control
-    )
+    enable_clicked = st.button("Enable Zero Export", disabled=not can_control)
 
 with col2:
-    disable_clicked = st.button(
-        "Disable Zero Export (10000W)",
-        disabled=not can_control
-    )
+    disable_clicked = st.button("Disable Zero Export", disabled=not can_control)
 
-# ---------------- ENABLE ----------------
 if enable_clicked:
-    st.session_state.parse_debug.clear()
-    st.session_state.parsed_payloads.clear()
+    st.session_state.write_mode = "enable"
+    st.session_state.write_unlocked = False
+    st.session_state.state = "WRITE_PASSWORD"
 
-    publish("UP#,1536:02014")
-    publish("UP#,1540:00001")
-    publish("UP#,1536:00001")
-    
-    st.session_state.state = "WAIT_UP_LOCK"
-    st.session_state.pending_register = None
-    st.session_state.expected_export_value = 1
-    st.session_state.pending_since = time.time()
-
-# ---------------- DISABLE ----------------
 if disable_clicked:
-    st.session_state.parse_debug.clear()
-    st.session_state.parsed_payloads.clear()
+    st.session_state.write_mode = "disable"
+    st.session_state.write_unlocked = False
+    st.session_state.state = "WRITE_PASSWORD"
+# -------------------Enter Password-----------------------------
+if st.session_state.state == "WRITE_PASSWORD":
+    st.subheader("🔐 Enter Inverter Password")
 
-    publish("UP#,1536:02014")
-    publish("UP#,1540:10000")
-    publish("UP#,1536:00001")
+    pwd = st.text_input("Password", type="password")
 
-    st.session_state.state = "WAIT_UP_LOCK"
-    st.session_state.pending_register = None
-    st.session_state.expected_export_value = 10000
-    st.session_state.pending_since = time.time()
+    if st.button("Unlock"):
+        padded = pwd.zfill(5)
+        st.session_state.write_password = padded
 
+        publish(f"UP#,1536:{padded}")
+
+        if padded == "02014":
+            st.session_state.write_unlocked = True
+            st.session_state.state = "WRITE_VALUE"
+            st.success("Unlocked successfully")
+        else:
+            st.error("Invalid password")
+# ---------------Enter Export limit Value------------------------
+if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
+    st.subheader("⚙️ Set Export Limit")
+
+    if st.session_state.write_mode == "enable":
+        value = st.number_input(
+            "Export Limit (W)",
+            min_value=1,
+            max_value=60000,
+            value=1
+        )
+    else:
+        value = 10000
+        st.info("Disable mode → Export limit fixed to 10000 W")
+
+    if st.button("Set Export Limit"):
+        padded_val = f"{value:05d}"
+        st.session_state.write_value = value
+
+        publish(f"UP#,1540:{padded_val}")
+        st.session_state.state = "WRITE_LOCK"
+# --------------LOCK---------------------------------------
+if st.session_state.state == "WRITE_LOCK":
+    st.subheader("🔒 Lock Settings")
+
+    if st.button("Lock & Apply"):
+        publish("UP#,1536:00001")
+
+        st.session_state.state = "VERIFY_EXPORT"
+        st.session_state.pending_register = "0802"
+        st.session_state.pending_since = time.time()
