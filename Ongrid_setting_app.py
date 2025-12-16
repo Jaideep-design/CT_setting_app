@@ -5,7 +5,7 @@ import paho.mqtt.client as mqtt
 import warnings
 from streamlit_autorefresh import st_autorefresh
 import json
-
+import re
 warnings.filterwarnings("ignore")
 
 # =====================================================
@@ -97,22 +97,36 @@ def extract_register_value(payload: str, register: str):
         debug.append("Payload empty → ignored")
         return None
 
+    rsp = None
+
+    # 1️⃣ Try JSON first
     try:
         data = json.loads(payload)
         rsp = data.get("rsp", "")
-        debug.append(f"Parsed JSON rsp:\n{rsp}")
-    except json.JSONDecodeError as e:
-        debug.append(f"JSON decode error: {e}")
-        return None
+        debug.append("Parsed via json.loads()")
+    except Exception as e:
+        debug.append(f"JSON decode failed: {e}")
+        # 2️⃣ Fallback: extract rsp manually
+        match = re.search(r'"rsp"\s*:\s*"([\s\S]*)"\s*}', payload)
+        if match:
+            rsp = match.group(1)
+            debug.append("Parsed rsp via regex fallback")
+        else:
+            debug.append("Failed to extract rsp → ignored")
+            return None
+
+    debug.append("Parsed rsp:")
+    debug.append(rsp)
 
     # Ignore interim responses
     if "READ PROCESSING" in rsp:
         debug.append("Found READ PROCESSING → ignored")
         return None
 
+    # Parse register
     for line in rsp.splitlines():
         line = line.strip()
-        debug.append(f"Checking line: '{line}'")
+        debug.append(f"Checking line: {line}")
 
         if line.startswith(f"{register}:"):
             try:
@@ -123,7 +137,7 @@ def extract_register_value(payload: str, register: str):
                 debug.append(f"Value parse error: {e}")
                 return None
 
-    debug.append(f"❌ No register {register} found")
+    debug.append(f"No register {register} found")
     return None
     
 def drain_rx_queue():
@@ -295,6 +309,7 @@ if ct_enabled == "Yes":
             st.error("Export update failed")
 else:
     st.info("CT not enabled. Zero export unavailable.")
+
 
 
 
