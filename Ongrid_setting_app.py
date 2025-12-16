@@ -139,6 +139,13 @@ def extract_register(payload, register):
             return val
 
     return None
+
+def is_up_processed(payload: str) -> bool:
+    try:
+        rsp = json.loads(payload).get("rsp", "")
+    except Exception:
+        return False
+    return "UP PROCESSED" in rsp
 # =====================================================
 # EVENT-DRIVEN PARSER
 # =====================================================
@@ -204,6 +211,19 @@ def run_state_machine():
             st.session_state.state = "CONNECTED"
             st.session_state.parsed_payloads.clear()
             break
+
+        # =====================================================
+        # WAIT FOR FINAL UP LOCK (1536) TO COMPLETE
+        # =====================================================
+        elif st.session_state.state == "WAIT_UP_LOCK":
+            if is_up_processed(payload):
+                # 🔐 Lock confirmed → now start verification
+                publish("READ03**12345##1234567890,0802")
+                st.session_state.pending_register = "0802"
+                st.session_state.pending_since = time.time()
+                st.session_state.state = "ENABLE_VERIFY"
+                st.session_state.parsed_payloads.clear()
+                break
 
         # =====================================================
         # ENABLE / DISABLE VERIFY  ✅ CORRECT PLACE
@@ -318,14 +338,12 @@ if enable_clicked:
     st.session_state.parse_debug.clear()
     st.session_state.parsed_payloads.clear()
 
-    # 🔥 Fire-and-forget UP commands
     publish("UP#,1536:02014")
     publish("UP#,1540:00001")
     publish("UP#,1536:00001")
-
-    # ✅ Transition to VERIFY phase
-    st.session_state.state = "ENABLE_VERIFY"
-    st.session_state.pending_register = "0802"
+    
+    st.session_state.state = "WAIT_UP_LOCK"
+    st.session_state.pending_register = None
     st.session_state.expected_export_value = 1
     st.session_state.pending_since = time.time()
 
@@ -338,11 +356,7 @@ if disable_clicked:
     publish("UP#,1540:10000")
     publish("UP#,1536:00001")
 
-    st.session_state.state = "DISABLE_VERIFY"
-    st.session_state.pending_register = "0802"
+    st.session_state.state = "WAIT_UP_LOCK"
+    st.session_state.pending_register = None
     st.session_state.expected_export_value = 10000
     st.session_state.pending_since = time.time()
-
-
-
-
