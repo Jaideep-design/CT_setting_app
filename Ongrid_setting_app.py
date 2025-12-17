@@ -165,7 +165,10 @@ def is_up_processed(payload: str) -> bool:
 def run_state_machine():
     if (
         not st.session_state.pending_register
-        and st.session_state.state not in ("WAIT_UP_PROCESSED",)
+        and st.session_state.state not in (
+            "WAIT_UP_PROCESSED",
+            "VERIFY_EXPORT_DELAY",
+        )
     ):
         return
 
@@ -181,6 +184,16 @@ def run_state_machine():
         st.session_state.parsed_payloads.clear()
         return
 
+    if st.session_state.state == "VERIFY_EXPORT_DELAY":
+        if time.time() < st.session_state.verify_at:
+            return
+    
+        publish("READ03**12345##1234567890,0802")
+        st.session_state.state = "VERIFY_EXPORT_ONCE"
+        st.session_state.pending_register = "0802"
+        st.session_state.pending_since = time.time()
+        st.session_state.parsed_payloads.clear()
+        return
 
     for ts, payload in st.session_state.response_log[st.session_state.response_cursor:]:
         st.session_state.response_cursor += 1  # ✅ advance once per payload
@@ -200,17 +213,13 @@ def run_state_machine():
         
             if is_up_processed(payload):
                 st.session_state.parse_debug.append(
-                    "🔐 Final UP PROCESSED received → verifying export"
+                    "🔐 Final UP PROCESSED received → settling before verify"
                 )
-        
-                publish("READ03**12345##1234567890,0802")
-        
-                st.session_state.state = "VERIFY_EXPORT_ONCE"
-                st.session_state.pending_register = "0802"
-                st.session_state.pending_since = time.time()
+            
+                st.session_state.verify_at = time.time() + 0.8
+                st.session_state.state = "VERIFY_EXPORT_DELAY"
                 st.session_state.parsed_payloads.clear()
-                break
-        
+                break        
             continue
     
         # =====================================================
@@ -345,15 +354,23 @@ with col1:
 with col2:
     disable_clicked = st.button("Disable Zero Export", disabled=not can_control)
 
-if enable_clicked:
-    st.session_state.write_mode = "enable"
+def start_write_flow(mode):
+    st.session_state.write_mode = mode
     st.session_state.write_unlocked = False
+
+    # 🔥 HARD RESET of read pipeline
+    st.session_state.pending_register = None
+    st.session_state.pending_since = None
+    st.session_state.parsed_payloads.clear()
+    st.session_state.response_cursor = len(st.session_state.response_log)
+
     st.session_state.state = "WRITE_PASSWORD"
 
+if enable_clicked:
+    start_write_flow("enable")
+
 if disable_clicked:
-    st.session_state.write_mode = "disable"
-    st.session_state.write_unlocked = False
-    st.session_state.state = "WRITE_PASSWORD"
+    start_write_flow("disable")
 # -------------------Enter Password-----------------------------
 if st.session_state.state == "WRITE_PASSWORD":
     st.subheader("🔐 Enter Inverter Password")
@@ -416,4 +433,5 @@ if st.session_state.state == "WRITE_LOCK":
 
         st.session_state.parsed_payloads.clear()
         st.session_state.response_cursor = len(st.session_state.response_log)
+
 
