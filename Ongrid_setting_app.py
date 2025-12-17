@@ -391,7 +391,7 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
         value = st.number_input(
             "Export Limit (W)",
             min_value=1,
-            max_value=60000,
+            max_value=61000,
             value=10000
         )
 
@@ -416,3 +416,4 @@ if st.session_state.state == "WRITE_LOCK":
 
         st.session_state.parsed_payloads.clear()
         st.session_state.response_cursor = len(st.session_state.response_log)
+
