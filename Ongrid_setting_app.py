@@ -8,6 +8,9 @@ from streamlit_autorefresh import st_autorefresh
 import warnings
 
 warnings.filterwarnings("ignore")
+st.markdown(
+    "[📄 View Zero Export Control Documentation](https://docs.google.com/document/d/19t-4g3MpZiy0W-6FyBcOZS9UOEp6_FumMR7E_fBK4PU/edit?usp=sharing)"
+)
 
 st.set_page_config("Solax Zero Export Control", layout="centered")
 
@@ -465,6 +468,7 @@ if st.session_state.state == "WRITE_LOCK":
 
         st.session_state.parsed_payloads.clear()
         st.session_state.response_cursor = len(st.session_state.response_log)
+
 
 
 
