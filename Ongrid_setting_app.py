@@ -253,16 +253,46 @@ def run_state_machine():
         # =====================================================
         # VERIFY EXPORT (SINGLE READ ONLY)
         # =====================================================
-        elif st.session_state.state == "VERIFY_EXPORT_ONCE":
+        # elif st.session_state.state == "VERIFY_EXPORT_ONCE":
         
+        #     if value == st.session_state.write_value:
+        #         st.session_state.export_limit = value
+        #         st.success("Export limit updated successfully")
+        
+        #     else:
+        #         st.error(
+        #             f"Export verification failed. "
+        #             f"Expected {st.session_state.write_value}, got {value}"
+        #         )
+        
+        #     # ✅ End verification — no retries
+        #     st.session_state.state = "CONNECTED"
+        #     st.session_state.pending_register = None
+        #     st.session_state.write_unlocked = False
+        #     st.session_state.write_value = None
+        #     st.session_state.parsed_payloads.clear()
+        #     break
+        elif st.session_state.state == "VERIFY_EXPORT_ONCE":
+
             if value == st.session_state.write_value:
                 st.session_state.export_limit = value
-                st.success("Export limit updated successfully")
+        
+                st.success(
+                    f"✅ Export limit successfully set to {value} W"
+                )
+        
+                st.session_state.parse_debug.append(
+                    f"✔ Verification success: 0802={value}"
+                )
         
             else:
                 st.error(
-                    f"Export verification failed. "
+                    f"❌ Export verification failed. "
                     f"Expected {st.session_state.write_value}, got {value}"
+                )
+        
+                st.session_state.parse_debug.append(
+                    f"✖ Verification failed: expected {st.session_state.write_value}, got {value}"
                 )
         
             # ✅ End verification — no retries
@@ -272,6 +302,7 @@ def run_state_machine():
             st.session_state.write_value = None
             st.session_state.parsed_payloads.clear()
             break
+
             
 if st.session_state.mqtt_client:
     st_autorefresh(interval=AUTO_REFRESH_MS, key="mqtt_refresh")
@@ -433,5 +464,6 @@ if st.session_state.state == "WRITE_LOCK":
 
         st.session_state.parsed_payloads.clear()
         st.session_state.response_cursor = len(st.session_state.response_log)
+
 
 
