@@ -381,9 +381,10 @@ col1, col2 = st.columns(2)
 
 with col1:
     enable_clicked = st.button("Enable Zero Export", disabled=not can_control)
-
+    st.info("For changing the export limit to 1 W")
 with col2:
     disable_clicked = st.button("Disable Zero Export", disabled=not can_control)
+    st.info("For changing the export limit to 10000 W")
 
 def start_write_flow(mode):
     st.session_state.write_mode = mode
@@ -464,6 +465,7 @@ if st.session_state.state == "WRITE_LOCK":
 
         st.session_state.parsed_payloads.clear()
         st.session_state.response_cursor = len(st.session_state.response_log)
+
 
 
 
