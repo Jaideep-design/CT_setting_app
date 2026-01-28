@@ -242,7 +242,11 @@ device = st.selectbox("Select Device", DEVICE_TOPICS)
 if st.button("Connect", disabled=st.session_state.state != "IDLE"):
     mqtt_connect(device)
 
-st.success("Connected") if st.session_state.state == "CONNECTED" else st.warning("Connecting...")
+# st.success("Connected") if st.session_state.state == "CONNECTED" else st.warning("Connecting...")
+if st.session_state.state == "CONNECTED":
+    st.success("Connected")
+else:
+    st.warning("Connecting...")
 
 # =====================================================
 # READ
