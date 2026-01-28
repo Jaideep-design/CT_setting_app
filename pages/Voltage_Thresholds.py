@@ -287,16 +287,39 @@ if st.session_state.state == "WRITE_PASSWORD":
         else:
             st.error("Invalid password")
 
-if st.session_state.state == "WRITE_VALUE":
-    reg = REG_VOLTAGE_HIGH if st.session_state.write_mode == "Upper" else REG_VOLTAGE_LOW
-    publish(f"UP#,1540:{st.session_state.write_value:05d}")
-    st.session_state.pending_register = reg
-    st.session_state.state = "WRITE_LOCK"
+if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
+
+    st.subheader("⚙️ Set Voltage Threshold")
+
+    value = st.number_input(
+        "Voltage (V)",
+        min_value=150,
+        max_value=300,
+        value=st.session_state.write_value or 230
+    )
+
+    if st.button("Set Value"):
+        padded = f"{value:05d}"
+        st.session_state.write_value = value
+
+        publish(f"UP#,1540:{padded}")
+        st.session_state.state = "WRITE_LOCK"
+
+        st.session_state.response_cursor = len(st.session_state.response_log)
+        st.stop()   # ⛔ important
 
 if st.session_state.state == "WRITE_LOCK":
+
+    st.subheader("🔒 Lock Settings")
+
     if st.button("Lock & Apply"):
         ts = time.time()
         publish("UP#,1536:00001")
+
         st.session_state.lock_sent_at = ts
-        st.session_state.state = "WAIT_UP_PROCESSED"
         st.session_state.pending_since = ts
+        st.session_state.state = "WAIT_UP_PROCESSED"
+
+        st.session_state.parsed_payloads.clear()
+        st.session_state.response_cursor = len(st.session_state.response_log)
+        st.stop()
