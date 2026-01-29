@@ -161,16 +161,24 @@ def is_up_processed(payload):
 def run_state_machine():
 
     # -------------------------------
-    # GLOBAL TIMEOUT GUARD
+    # GLOBAL TIMEOUT GUARD (FIXED)
     # -------------------------------
-    if st.session_state.pending_since:
-        if time.time() - st.session_state.pending_since > TIMEOUT:
-            st.session_state.parse_debug.append("⏱ TIMEOUT")
-            st.session_state.state = "CONNECTED"
-            st.session_state.pending_register = None
-            st.session_state.pending_since = None
-            st.session_state.parsed_payloads.clear()
-            return
+    if st.session_state.state in (
+        "WAIT_UNLOCK_PROCESSED",
+        "WAIT_UP_PROCESSED",
+        "VERIFY_DELAY",
+        "VERIFY_ONCE",
+    ):
+        if st.session_state.pending_since:
+            if time.time() - st.session_state.pending_since > TIMEOUT:
+                st.session_state.parse_debug.append(
+                    f"⏱ TIMEOUT in state {st.session_state.state}"
+                )
+                st.session_state.state = "CONNECTED"
+                st.session_state.pending_register = None
+                st.session_state.pending_since = None
+                st.session_state.parsed_payloads.clear()
+                return
 
     # -------------------------------
     # VERIFY DELAY → ISSUE READ
@@ -336,26 +344,6 @@ if st.session_state.state == "WRITE_PASSWORD":
         st.session_state.state = "WAIT_UNLOCK_PROCESSED"
         st.session_state.response_cursor = len(st.session_state.response_log)
         st.stop()
-
-# -------------------------------
-# GLOBAL TIMEOUT GUARD (FIXED)
-# -------------------------------
-if st.session_state.state in (
-    "WAIT_UNLOCK_PROCESSED",
-    "WAIT_UP_PROCESSED",
-    "VERIFY_DELAY",
-    "VERIFY_ONCE",
-):
-    if st.session_state.pending_since:
-        if time.time() - st.session_state.pending_since > TIMEOUT:
-            st.session_state.parse_debug.append(
-                f"⏱ TIMEOUT in state {st.session_state.state}"
-            )
-            st.session_state.state = "CONNECTED"
-            st.session_state.pending_register = None
-            st.session_state.pending_since = None
-            st.session_state.parsed_payloads.clear()
-            return
             
 # -------------------------------
 # WRITE VALUE
