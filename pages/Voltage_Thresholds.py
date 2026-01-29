@@ -338,6 +338,26 @@ if st.session_state.state == "WRITE_PASSWORD":
         st.stop()
 
 # -------------------------------
+# GLOBAL TIMEOUT GUARD (FIXED)
+# -------------------------------
+if st.session_state.state in (
+    "WAIT_UNLOCK_PROCESSED",
+    "WAIT_UP_PROCESSED",
+    "VERIFY_DELAY",
+    "VERIFY_ONCE",
+):
+    if st.session_state.pending_since:
+        if time.time() - st.session_state.pending_since > TIMEOUT:
+            st.session_state.parse_debug.append(
+                f"⏱ TIMEOUT in state {st.session_state.state}"
+            )
+            st.session_state.state = "CONNECTED"
+            st.session_state.pending_register = None
+            st.session_state.pending_since = None
+            st.session_state.parsed_payloads.clear()
+            return
+            
+# -------------------------------
 # WRITE VALUE
 # -------------------------------
 if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
