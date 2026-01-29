@@ -214,6 +214,11 @@ def run_state_machine():
                     "🔐 Final UP PROCESSED received → settling before verify"
                 )
 
+                if st.session_state.write_mode == "Upper":
+                    st.session_state.pending_register = "0808"
+                else:
+                    st.session_state.pending_register = "0811"
+                
                 st.session_state.verify_at = time.time() + 0.8
                 st.session_state.state = "VERIFY_VOLTAGE_DELAY"
                 st.session_state.parsed_payloads.clear()
@@ -378,11 +383,10 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
 
         if st.session_state.write_mode == "Upper":
             publish(f"UP#,1566:{padded_val}")
-            st.session_state.pending_register = "0808"
         else:
             publish(f"UP#,1567:{padded_val}")
-            st.session_state.pending_register = "0811"
-
+        
+        st.session_state.pending_register = None
         st.session_state.state = "WRITE_LOCK"
 
 # -------------------------------
