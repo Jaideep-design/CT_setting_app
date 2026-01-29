@@ -249,6 +249,23 @@ else:
     st.warning("Connecting...")
 
 # =====================================================
+# DEBUG
+# =====================================================
+with st.expander("📡 Raw MQTT Responses"):
+    st.text_area(
+        "Responses",
+        value="\n\n---\n\n".join(p for _, p in st.session_state.response_log),
+        height=300
+    )
+
+with st.expander("🧪 Parsing Debug Trace"):
+    st.text_area(
+        "Parser activity",
+        value="\n".join(st.session_state.parse_debug),
+        height=400
+    )
+
+# =====================================================
 # READ
 # =====================================================
 if st.button("Read Voltage Thresholds", disabled=st.session_state.state != "CONNECTED"):
@@ -310,10 +327,13 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
             st.session_state.pending_register = REG_VOLTAGE_LOW   # 0811
 
         publish(f"UP#,${write_reg}:{padded}".replace("$",""))
-        st.session_state.state = "WRITE_LOCK"
 
+        st.session_state.state = "WRITE_LOCK"
+        st.session_state.pending_since = time.time()   # ✅ ADD THIS
+        
         st.session_state.response_cursor = len(st.session_state.response_log)
         st.stop()
+
 
 if st.session_state.state == "WRITE_LOCK":
 
