@@ -156,123 +156,120 @@ def is_up_processed(payload):
         return False
 
 # =====================================================
-# STATE MACHINE
+# EVENT-DRIVEN PARSER  (VOLTAGE VERSION)
 # =====================================================
 def run_state_machine():
-
-    # -------------------------------
-    # GLOBAL TIMEOUT GUARD (FIXED)
-    # -------------------------------
-    if st.session_state.state in (
-        "WAIT_UP_PROCESSED",
-        "VERIFY_DELAY",
-        "VERIFY_ONCE",
+    if (
+        not st.session_state.pending_register
+        and st.session_state.state not in (
+            "WAIT_UP_PROCESSED",
+            "VERIFY_VOLTAGE_DELAY",
+        )
     ):
-        if st.session_state.pending_since:
-            if time.time() - st.session_state.pending_since > TIMEOUT:
-                st.session_state.parse_debug.append(
-                    f"⏱ TIMEOUT in state {st.session_state.state}"
-                )
-                st.session_state.state = "CONNECTED"
-                st.session_state.pending_register = None
-                st.session_state.pending_since = None
-                st.session_state.parsed_payloads.clear()
-                return
+        return
 
-    # -------------------------------
-    # VERIFY DELAY → ISSUE READ
-    # -------------------------------
-    if st.session_state.state == "VERIFY_DELAY":
+    # ⏱ timeout guard (UNCHANGED)
+    if time.time() - st.session_state.pending_since > TIMEOUT:
+        if st.session_state.state == "WAIT_UP_PROCESSED":
+            st.session_state.parse_debug.append("⏱ TIMEOUT waiting for UP PROCESSED")
+        else:
+            st.session_state.parse_debug.append("⏱ TIMEOUT waiting for register")
+
+        st.session_state.pending_register = None
+        st.session_state.state = "CONNECTED"
+        st.session_state.parsed_payloads.clear()
+        return
+
+    # ---------------- VERIFY DELAY ----------------
+    if st.session_state.state == "VERIFY_VOLTAGE_DELAY":
         if time.time() < st.session_state.verify_at:
             return
 
-        publish(f"READ03**12345##1234567890,{st.session_state.pending_register}")
-        st.session_state.state = "VERIFY_ONCE"
+        publish(
+            f"READ03**12345##1234567890,{st.session_state.pending_register}"
+        )
+        st.session_state.state = "VERIFY_VOLTAGE_ONCE"
         st.session_state.pending_since = time.time()
+        st.session_state.parsed_payloads.clear()
         return
 
-    # -------------------------------
-    # PROCESS MQTT PAYLOADS
-    # -------------------------------
     for ts, payload in st.session_state.response_log[st.session_state.response_cursor:]:
         st.session_state.response_cursor += 1
 
         if payload in st.session_state.parsed_payloads:
             continue
+
         st.session_state.parsed_payloads.add(payload)
 
         # =====================================================
-        # WAIT FOR UNLOCK CONFIRMATION
-        # =====================================================
-        if st.session_state.state == "WAIT_UNLOCK_PROCESSED":
-            if is_up_processed(payload):
-                st.session_state.write_unlocked = True
-                st.session_state.state = "WRITE_VALUE"
-                st.session_state.pending_since = None
-                st.session_state.parse_debug.append("🔓 Unlock confirmed")
-                break
-            continue
-
-        # =====================================================
-        # WAIT FOR WRITE CONFIRMATION
-        # =====================================================
-        if st.session_state.state == "WAIT_WRITE_PROCESSED":
-            if is_up_processed(payload):
-                st.session_state.parse_debug.append("✍️ Write confirmed")
-                st.session_state.state = "WRITE_LOCK"
-                st.session_state.pending_since = None
-                break
-            continue
-        
-        # =====================================================
-        # WAIT FOR FINAL LOCK CONFIRMATION
+        # WAIT FOR *FINAL* UP PROCESSED (after LOCK)
         # =====================================================
         if st.session_state.state == "WAIT_UP_PROCESSED":
+
             if ts < st.session_state.lock_sent_at:
                 continue
+
             if is_up_processed(payload):
+                st.session_state.parse_debug.append(
+                    "🔐 Final UP PROCESSED received → settling before verify"
+                )
+
                 st.session_state.verify_at = time.time() + 0.8
-                st.session_state.state = "VERIFY_DELAY"
+                st.session_state.state = "VERIFY_VOLTAGE_DELAY"
                 st.session_state.parsed_payloads.clear()
                 break
+
             continue
 
         # =====================================================
-        # REGISTER PARSING
+        # REGISTER-BASED STATES
         # =====================================================
         value = extract_register(payload, st.session_state.pending_register)
         if value is None:
             continue
 
-        # -------------------------------
-        # READ FLOW
-        # -------------------------------
+        # ---------------- READ FLOW ----------------
         if st.session_state.state == "READ_HIGH":
             st.session_state.voltage_high = value
-            publish(f"READ03**12345##1234567890,{REG_VOLTAGE_LOW}")
-            st.session_state.pending_register = REG_VOLTAGE_LOW
+
+            publish("READ03**12345##1234567890,0811")
+            st.session_state.pending_register = "0811"
+            st.session_state.pending_since = time.time()
             st.session_state.state = "READ_LOW"
+            st.session_state.parsed_payloads.clear()
             break
 
-        if st.session_state.state == "READ_LOW":
+        elif st.session_state.state == "READ_LOW":
             st.session_state.voltage_low = value
-            st.session_state.state = "CONNECTED"
+
             st.session_state.pending_register = None
+            st.session_state.state = "CONNECTED"
+            st.session_state.parsed_payloads.clear()
             break
 
-        # -------------------------------
-        # VERIFY AFTER WRITE
-        # -------------------------------
-        if st.session_state.state == "VERIFY_ONCE":
+        # ---------------- VERIFY ----------------
+        elif st.session_state.state == "VERIFY_VOLTAGE_ONCE":
+
             if value == st.session_state.write_value:
-                st.success("✅ Voltage threshold updated")
+                if st.session_state.write_mode == "Upper":
+                    st.session_state.voltage_high = value
+                else:
+                    st.session_state.voltage_low = value
+
+                st.success(f"✅ Voltage threshold set to {value} V")
+                st.session_state.parse_debug.append(
+                    f"✔ Verification success: {st.session_state.pending_register}={value}"
+                )
             else:
-                st.error("❌ Verification failed")
+                st.error(
+                    f"❌ Verification failed. Expected {st.session_state.write_value}, got {value}"
+                )
 
             st.session_state.state = "CONNECTED"
-            st.session_state.write_unlocked = False
             st.session_state.pending_register = None
-            st.session_state.pending_since = None
+            st.session_state.write_unlocked = False
+            st.session_state.write_value = None
+            st.session_state.parsed_payloads.clear()
             break
 
 # =====================================================
@@ -345,63 +342,62 @@ if st.button("Set"):
 # PASSWORD
 # -------------------------------
 if st.session_state.state == "WRITE_PASSWORD":
+    st.subheader("🔐 Enter Inverter Password")
+
     pwd = st.text_input("Password", type="password")
+
     if st.button("Unlock"):
         padded = pwd.zfill(5)
+        st.session_state.write_password = padded
+
         publish(f"UP#,1536:{padded}")
 
-        st.session_state.pending_since = time.time()
-        st.session_state.state = "WAIT_UNLOCK_PROCESSED"
-        st.session_state.response_cursor = len(st.session_state.response_log)
-        st.stop()
+        if padded == "02014":
+            st.session_state.write_unlocked = True
+            st.session_state.state = "WRITE_VALUE"
+            st.success("Unlocked successfully")
+        else:
+            st.error("Invalid password")
             
 # -------------------------------
 # WRITE VALUE
 # -------------------------------
 if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
-
-    st.subheader("⚙️ Confirm Voltage Threshold")
+    st.subheader("⚙️ Set Voltage Threshold")
 
     value = st.number_input(
         "Voltage (V)",
         min_value=150,
         max_value=300,
-        value=st.session_state.write_value
+        value=st.session_state.write_value or 230
     )
 
     if st.button("Set Value"):
-        padded = f"{value:05d}"
+        padded_val = f"{value:05d}"
         st.session_state.write_value = value
 
         if st.session_state.write_mode == "Upper":
-            write_reg = "1566"
-            st.session_state.pending_register = REG_VOLTAGE_HIGH
+            publish(f"UP#,1566:{padded_val}")
+            st.session_state.pending_register = "0808"
         else:
-            write_reg = "1567"
-            st.session_state.pending_register = REG_VOLTAGE_LOW
+            publish(f"UP#,1567:{padded_val}")
+            st.session_state.pending_register = "0811"
 
-        publish(f"UP#,${write_reg}:{padded}".replace("$", ""))
-
-        st.session_state.state = "WAIT_WRITE_PROCESSED"
-        st.session_state.pending_since = time.time()
-        st.session_state.response_cursor = len(st.session_state.response_log)
-        st.stop()
+        st.session_state.state = "WRITE_LOCK"
 
 # -------------------------------
 # LOCK & APPLY
 # -------------------------------
 if st.session_state.state == "WRITE_LOCK":
-
     st.subheader("🔒 Lock Settings")
 
     if st.button("Lock & Apply"):
-        ts = time.time()
+        lock_ts = time.time()
         publish("UP#,1536:00001")
 
-        st.session_state.lock_sent_at = ts
-        st.session_state.pending_since = ts
+        st.session_state.lock_sent_at = lock_ts
         st.session_state.state = "WAIT_UP_PROCESSED"
+        st.session_state.pending_since = lock_ts
 
         st.session_state.parsed_payloads.clear()
         st.session_state.response_cursor = len(st.session_state.response_log)
-        st.stop()
