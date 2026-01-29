@@ -378,7 +378,8 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
     )
 
     if st.button("Set Value"):
-        padded_val = f"{value:05d}"
+        scaled = value * 10
+        padded_val = f"{scaled:05d}"
         st.session_state.write_value = value
 
         if st.session_state.write_mode == "Upper":
