@@ -302,11 +302,18 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
         padded = f"{value:05d}"
         st.session_state.write_value = value
 
-        publish(f"UP#,1540:{padded}")
+        if st.session_state.write_mode == "Upper":
+            write_reg = "1566"
+            st.session_state.pending_register = REG_VOLTAGE_HIGH  # 0808
+        else:
+            write_reg = "1567"
+            st.session_state.pending_register = REG_VOLTAGE_LOW   # 0811
+
+        publish(f"UP#,${write_reg}:{padded}".replace("$",""))
         st.session_state.state = "WRITE_LOCK"
 
         st.session_state.response_cursor = len(st.session_state.response_log)
-        st.stop()   # ⛔ important
+        st.stop()
 
 if st.session_state.state == "WRITE_LOCK":
 
