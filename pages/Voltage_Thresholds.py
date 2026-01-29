@@ -164,7 +164,6 @@ def run_state_machine():
     # GLOBAL TIMEOUT GUARD (FIXED)
     # -------------------------------
     if st.session_state.state in (
-        "WAIT_UNLOCK_PROCESSED",
         "WAIT_UP_PROCESSED",
         "VERIFY_DELAY",
         "VERIFY_ONCE",
