@@ -215,6 +215,17 @@ def run_state_machine():
             continue
 
         # =====================================================
+        # WAIT FOR WRITE CONFIRMATION
+        # =====================================================
+        if st.session_state.state == "WAIT_WRITE_PROCESSED":
+            if is_up_processed(payload):
+                st.session_state.parse_debug.append("✍️ Write confirmed")
+                st.session_state.state = "WRITE_LOCK"
+                st.session_state.pending_since = None
+                break
+            continue
+        
+        # =====================================================
         # WAIT FOR FINAL LOCK CONFIRMATION
         # =====================================================
         if st.session_state.state == "WAIT_UP_PROCESSED":
@@ -372,7 +383,7 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
 
         publish(f"UP#,${write_reg}:{padded}".replace("$", ""))
 
-        st.session_state.state = "WRITE_LOCK"
+        st.session_state.state = "WAIT_WRITE_PROCESSED"
         st.session_state.pending_since = time.time()
         st.session_state.response_cursor = len(st.session_state.response_log)
         st.stop()
