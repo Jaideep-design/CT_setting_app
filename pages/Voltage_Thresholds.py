@@ -160,18 +160,21 @@ def is_up_processed(payload):
 # =====================================================
 def run_state_machine():
 
-    if not st.session_state.pending_register and st.session_state.state not in (
-        "WAIT_UP_PROCESSED", "VERIFY_DELAY"
-    ):
-        return
+    # -------------------------------
+    # GLOBAL TIMEOUT GUARD
+    # -------------------------------
+    if st.session_state.pending_since:
+        if time.time() - st.session_state.pending_since > TIMEOUT:
+            st.session_state.parse_debug.append("⏱ TIMEOUT")
+            st.session_state.state = "CONNECTED"
+            st.session_state.pending_register = None
+            st.session_state.pending_since = None
+            st.session_state.parsed_payloads.clear()
+            return
 
-    if time.time() - st.session_state.pending_since > TIMEOUT:
-        st.session_state.parse_debug.append("⏱ TIMEOUT")
-        st.session_state.state = "CONNECTED"
-        st.session_state.pending_register = None
-        st.session_state.parsed_payloads.clear()
-        return
-
+    # -------------------------------
+    # VERIFY DELAY → ISSUE READ
+    # -------------------------------
     if st.session_state.state == "VERIFY_DELAY":
         if time.time() < st.session_state.verify_at:
             return
@@ -181,6 +184,9 @@ def run_state_machine():
         st.session_state.pending_since = time.time()
         return
 
+    # -------------------------------
+    # PROCESS MQTT PAYLOADS
+    # -------------------------------
     for ts, payload in st.session_state.response_log[st.session_state.response_cursor:]:
         st.session_state.response_cursor += 1
 
@@ -188,6 +194,21 @@ def run_state_machine():
             continue
         st.session_state.parsed_payloads.add(payload)
 
+        # =====================================================
+        # WAIT FOR UNLOCK CONFIRMATION
+        # =====================================================
+        if st.session_state.state == "WAIT_UNLOCK_PROCESSED":
+            if is_up_processed(payload):
+                st.session_state.write_unlocked = True
+                st.session_state.state = "WRITE_VALUE"
+                st.session_state.pending_since = None
+                st.session_state.parse_debug.append("🔓 Unlock confirmed")
+                break
+            continue
+
+        # =====================================================
+        # WAIT FOR FINAL LOCK CONFIRMATION
+        # =====================================================
         if st.session_state.state == "WAIT_UP_PROCESSED":
             if ts < st.session_state.lock_sent_at:
                 continue
@@ -198,10 +219,16 @@ def run_state_machine():
                 break
             continue
 
+        # =====================================================
+        # REGISTER PARSING
+        # =====================================================
         value = extract_register(payload, st.session_state.pending_register)
         if value is None:
             continue
 
+        # -------------------------------
+        # READ FLOW
+        # -------------------------------
         if st.session_state.state == "READ_HIGH":
             st.session_state.voltage_high = value
             publish(f"READ03**12345##1234567890,{REG_VOLTAGE_LOW}")
@@ -215,6 +242,9 @@ def run_state_machine():
             st.session_state.pending_register = None
             break
 
+        # -------------------------------
+        # VERIFY AFTER WRITE
+        # -------------------------------
         if st.session_state.state == "VERIFY_ONCE":
             if value == st.session_state.write_value:
                 st.success("✅ Voltage threshold updated")
@@ -224,6 +254,7 @@ def run_state_machine():
             st.session_state.state = "CONNECTED"
             st.session_state.write_unlocked = False
             st.session_state.pending_register = None
+            st.session_state.pending_since = None
             break
 
 # =====================================================
@@ -285,7 +316,6 @@ st.divider()
 st.subheader("⚙️ Set Voltage Threshold")
 
 mode = st.radio("Select Register", ["Upper", "Lower"])
-
 value = st.number_input("Voltage Value", min_value=150, max_value=300)
 
 if st.button("Set"):
@@ -293,26 +323,32 @@ if st.button("Set"):
     st.session_state.write_value = value
     st.session_state.state = "WRITE_PASSWORD"
 
+# -------------------------------
+# PASSWORD
+# -------------------------------
 if st.session_state.state == "WRITE_PASSWORD":
     pwd = st.text_input("Password", type="password")
     if st.button("Unlock"):
         padded = pwd.zfill(5)
         publish(f"UP#,1536:{padded}")
-        if padded == "02014":
-            st.session_state.write_unlocked = True
-            st.session_state.state = "WRITE_VALUE"
-        else:
-            st.error("Invalid password")
 
+        st.session_state.pending_since = time.time()
+        st.session_state.state = "WAIT_UNLOCK_PROCESSED"
+        st.session_state.response_cursor = len(st.session_state.response_log)
+        st.stop()
+
+# -------------------------------
+# WRITE VALUE
+# -------------------------------
 if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
 
-    st.subheader("⚙️ Set Voltage Threshold")
+    st.subheader("⚙️ Confirm Voltage Threshold")
 
     value = st.number_input(
         "Voltage (V)",
         min_value=150,
         max_value=300,
-        value=st.session_state.write_value or 230
+        value=st.session_state.write_value
     )
 
     if st.button("Set Value"):
@@ -321,20 +357,21 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
 
         if st.session_state.write_mode == "Upper":
             write_reg = "1566"
-            st.session_state.pending_register = REG_VOLTAGE_HIGH  # 0808
+            st.session_state.pending_register = REG_VOLTAGE_HIGH
         else:
             write_reg = "1567"
-            st.session_state.pending_register = REG_VOLTAGE_LOW   # 0811
+            st.session_state.pending_register = REG_VOLTAGE_LOW
 
-        publish(f"UP#,${write_reg}:{padded}".replace("$",""))
+        publish(f"UP#,${write_reg}:{padded}".replace("$", ""))
 
         st.session_state.state = "WRITE_LOCK"
-        st.session_state.pending_since = time.time()   # ✅ ADD THIS
-        
+        st.session_state.pending_since = time.time()
         st.session_state.response_cursor = len(st.session_state.response_log)
         st.stop()
 
-
+# -------------------------------
+# LOCK & APPLY
+# -------------------------------
 if st.session_state.state == "WRITE_LOCK":
 
     st.subheader("🔒 Lock Settings")
