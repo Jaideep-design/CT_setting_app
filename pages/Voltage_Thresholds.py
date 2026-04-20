@@ -372,7 +372,7 @@ if st.session_state.state == "WRITE_VALUE" and st.session_state.write_unlocked:
 
     value = st.number_input(
         "Voltage (V)",
-        min_value=130,
+        min_value=90,
         max_value=300,
         value=st.session_state.write_value or 230
     )
