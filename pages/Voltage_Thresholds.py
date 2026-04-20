@@ -336,7 +336,7 @@ st.divider()
 st.subheader("⚙️ Set Voltage Threshold")
 
 mode = st.radio("Select Register", ["Upper", "Lower"])
-value = st.number_input("Voltage Value", min_value=150, max_value=300)
+value = st.number_input("Voltage Value", min_value=90, max_value=300)
 
 if st.button("Set"):
     st.session_state.write_mode = mode
