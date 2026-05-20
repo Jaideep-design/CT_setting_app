@@ -22,7 +22,7 @@ MAX_LOG_LINES = 100
 TIMEOUT = 6
 
 TOPIC_PREFIX = "EZMCOGX"
-DEVICE_TOPICS = [f"{TOPIC_PREFIX}{i:06d}" for i in range(1, 801)]
+DEVICE_TOPICS = [f"{TOPIC_PREFIX}{i:06d}" for i in range(1, 1001)]
 
 # =====================================================
 # SESSION STATE INIT
